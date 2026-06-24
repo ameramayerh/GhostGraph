@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Save, Server, Cpu, Clock, Key } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -19,7 +19,7 @@ export function SettingsPage() {
         if (data.api_key) setApiKey(data.api_key);
         setLoading(false);
       })
-      .catch(err => {
+      .catch(() => {
         toast.error("Failed to load settings from DB");
         setLoading(false);
       });
