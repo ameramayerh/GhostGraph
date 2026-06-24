@@ -13,7 +13,7 @@ export const LiveTerminal: React.FC = () => {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    ws.current = new WebSocket('ws://127.0.0.1:8000/ws/logs');
+    ws.current = new WebSocket('ws://127.0.0.1:8000/api/ws/logs');
     
     ws.current.onmessage = (event) => {
       try {
