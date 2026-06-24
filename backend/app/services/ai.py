@@ -99,6 +99,43 @@ class AISecurityOrchestrator:
         self.remed_agent = RemediationAgent()
 
     def analyze_finding(self, title: str, description: str, evidence: str, provider: str = "local-llama3", api_key: str = None) -> dict:
+        if "gemini" in provider.lower():
+            if not api_key:
+                raise RuntimeError("API Key is required for Gemini")
+            try:
+                from google import genai
+                from google.genai import types
+                client = genai.Client(api_key=api_key)
+                prompt = f"""You are GhostGraph AI, an Educational Security Pair Programmer.
+                
+                Analyze the following vulnerability:
+                Title: {title}
+                Description: {description}
+                Evidence: {evidence}
+                
+                Provide your response strictly as JSON with the following keys:
+                - "explanation": Explain conceptually why this vulnerability exists and what mistakes cause it.
+                - "business_impact": The potential organizational consequence if deployed.
+                - "remediation": Step-by-step guidance on writing it securely.
+                - "code_patch": Secure refactored code snippet.
+                - "confidence": High, Medium, or Low.
+                """
+                response = client.models.generate_content(
+                    model='gemini-2.5-flash',
+                    contents=prompt,
+                    config=types.GenerateContentConfig(response_mime_type="application/json")
+                )
+                res = json.loads(response.text)
+                return {
+                    "explanation": str(res.get("explanation", "")),
+                    "business_impact": str(res.get("business_impact", "")),
+                    "remediation": str(res.get("remediation", "")),
+                    "code_patch": str(res.get("code_patch", "")),
+                    "confidence": str(res.get("confidence", "Unknown"))
+                }
+            except Exception as e:
+                raise RuntimeError(f"Gemini API failed: {str(e)}")
+
         if "cloud" in provider.lower() or "openai" in provider.lower() or "anthropic" in provider.lower():
             if not api_key:
                 raise RuntimeError(f"API Key is required for {provider}")
@@ -136,6 +173,48 @@ class AISecurityOrchestrator:
             raise RuntimeError(f"AI analysis failed: {str(e)}")
 
     def evaluate_false_positive(self, title: str, description: str, evidence: str, provider: str = "local-llama3", api_key: str = None) -> dict:
+        if "gemini" in provider.lower():
+            if not api_key:
+                return {"is_false_positive": False, "reason": "Gemini API Key missing. Defaulting to true positive."}
+            try:
+                from google import genai
+                from google.genai import types
+                client = genai.Client(api_key=api_key)
+                prompt = f"""You are GhostGraph AI's False Positive Reduction Engine.
+A static analysis scanner has flagged the following code snippet. 
+Your job is to determine if this is a FALSE POSITIVE (e.g., test code, a mock, unused code, or perfectly safe context) or a TRUE VULNERABILITY (dangerous code that could run in production).
+
+CRITICAL DIRECTIVE: You must default to treating this as a TRUE VULNERABILITY (is_real_vulnerability: true). 
+You may ONLY mark it as a False Positive (is_real_vulnerability: false) IF AND ONLY IF you see absolute proof in the snippet that it is safe, such as:
+1. The code explicitly hardcodes a safely sanitized, static string.
+2. The file path explicitly contains "test", "mock", or "spec".
+3. A secret key is literally "secret", "password", "test", or similar mock data.
+
+If a variable's origin is UNKNOWN or NOT VISIBLE in the snippet, you MUST ASSUME it is attacker-controlled and mark it as a TRUE VULNERABILITY. Do not guess that it is safe.
+
+Title: {title}
+Description: {description}
+Code Snippet:
+{evidence}
+
+Analyze the code. Does this look like a real, reachable vulnerability in production logic, or is it just test data, demo secrets, or unreachable noise?
+Provide your response strictly as JSON with two keys:
+- "is_real_vulnerability": A boolean (true if it is a real dangerous vulnerability, false if it is safe, test code, or unreachable noise).
+- "reason": A 1 sentence explanation of why.
+"""
+                response = client.models.generate_content(
+                    model='gemini-2.5-flash',
+                    contents=prompt,
+                    config=types.GenerateContentConfig(response_mime_type="application/json")
+                )
+                res = json.loads(response.text)
+                is_vuln = res.get("is_real_vulnerability", True)
+                if isinstance(is_vuln, str):
+                    is_vuln = is_vuln.lower() == 'true'
+                return {"is_false_positive": not bool(is_vuln), "reason": str(res.get("reason", ""))}
+            except Exception as e:
+                return {"is_false_positive": False, "reason": f"Gemini API failed: {str(e)}"}
+
         if "cloud" in provider.lower() or "openai" in provider.lower() or "anthropic" in provider.lower():
             if not api_key:
                 return {"is_false_positive": False, "reason": "Cloud API Key missing. Defaulting to true positive."}

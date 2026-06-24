@@ -74,10 +74,11 @@ export function SettingsPage() {
                 <option value="local-mistral">Local (Ollama / Mistral 7B)</option>
                 <option value="openai-gpt4">Cloud (OpenAI GPT-4o) - Requires API Key</option>
                 <option value="anthropic-claude">Cloud (Anthropic Claude 3.5 Sonnet)</option>
+                <option value="cloud-gemini-2.5-flash">Cloud (Google Gemini 2.5 Flash) - Requires API Key</option>
               </select>
             </div>
             
-            {['openai-gpt4', 'anthropic-claude'].includes(llmProvider) && (
+            {['openai-gpt4', 'anthropic-claude', 'cloud-gemini-2.5-flash'].includes(llmProvider) && (
               <div>
                 <label className="block text-sm font-medium mb-2 flex items-center gap-2">
                   <Key size={14} /> API Key
