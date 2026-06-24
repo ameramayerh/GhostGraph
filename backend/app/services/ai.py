@@ -150,9 +150,13 @@ class AISecurityOrchestrator:
 A static analysis scanner has flagged the following code snippet. 
 Your job is to determine if this is a FALSE POSITIVE (e.g., test code, a mock, unused code, or perfectly safe context) or a TRUE VULNERABILITY (dangerous code that could run in production).
 
-Crucially, perform AI Reachability Analysis: Look at the dangerous function call in the snippet. Is the variable being passed into it derived from external user input (e.g., req.query, req.body, headers) or is it a hardcoded string that attackers cannot manipulate? If it is safely hardcoded or unreachable by external actors, mark it as a False Positive.
+CRITICAL DIRECTIVE: You must default to treating this as a TRUE VULNERABILITY (is_real_vulnerability: true). 
+You may ONLY mark it as a False Positive (is_real_vulnerability: false) IF AND ONLY IF you see absolute proof in the snippet that it is safe, such as:
+1. The code explicitly hardcodes a safely sanitized, static string.
+2. The file path explicitly contains "test", "mock", or "spec".
+3. A secret key is literally "secret", "password", "test", or similar mock data.
 
-Also evaluate Secrets: If the finding flags a hardcoded secret, check if the value is clearly a mock, placeholder, default dev secret (e.g., "secret", "changeme", "test"), or located in a test/demo file. If so, mark it as a False Positive. We only care about real, high-entropy production secrets.
+If a variable's origin is UNKNOWN or NOT VISIBLE in the snippet, you MUST ASSUME it is attacker-controlled and mark it as a TRUE VULNERABILITY. Do not guess that it is safe.
 
 Title: {title}
 Description: {description}
