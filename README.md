@@ -24,15 +24,15 @@ GhostGraph is an open-source Static Application Security Testing (SAST) and Soft
 We have provided convenient launcher scripts that handle virtual environments, dependency installations, and port forwarding for you.
 
 ### Option 1: Running on Windows
-1. Double-click the **`start_sentinel.bat`** file located in the root of the project.
+1. Double-click the **`start_ghostgraph.bat`** file located in the root of the project.
 2. The script will automatically open the backend and frontend terminals and launch your browser to `http://localhost:5173`.
 
 ### Option 2: Running on Linux (e.g. Kali VM)
 1. Open a terminal in the GhostGraph directory.
 2. Run the launcher script:
    ```bash
-   chmod +x start_sentinel.sh
-   ./start_sentinel.sh
+   chmod +x start_ghostgraph.sh
+   ./start_ghostgraph.sh
    ```
 
 ---
