@@ -10,7 +10,7 @@ interface LogMessage {
 export const LiveTerminal: React.FC = () => {
   const [logs, setLogs] = useState<LogMessage[]>([]);
   const ws = useRef<WebSocket | null>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     ws.current = new WebSocket('ws://127.0.0.1:8000/api/ws/logs');
@@ -18,11 +18,14 @@ export const LiveTerminal: React.FC = () => {
     ws.current.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        setLogs(prev => [...prev, {
-          level: data.level,
-          message: data.message,
-          timestamp: new Date()
-        }]);
+        setLogs(prev => {
+          const newLogs = [...prev, {
+            level: data.level,
+            message: data.message,
+            timestamp: new Date()
+          }];
+          return newLogs.slice(-150); // Keep only the last 150 logs
+        });
       } catch (e) {
         console.error("Invalid WS payload", event.data);
       }
@@ -36,7 +39,9 @@ export const LiveTerminal: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (containerRef.current) {
+      containerRef.current.scrollTop = containerRef.current.scrollHeight;
+    }
   }, [logs]);
 
   return (
@@ -50,7 +55,7 @@ export const LiveTerminal: React.FC = () => {
           <div className="w-2.5 h-2.5 rounded-full bg-green-500/50 shadow-[0_0_8px_rgba(34,197,94,0.4)]"></div>
         </div>
       </div>
-      <div className="p-4 overflow-y-auto flex-1 font-mono text-xs space-y-1.5 custom-scrollbar">
+      <div ref={containerRef} className="p-4 overflow-y-auto flex-1 font-mono text-xs space-y-1.5 custom-scrollbar">
         {logs.length === 0 ? (
           <div className="text-gray-600 italic">Listening for raw engine telemetry...</div>
         ) : (
@@ -70,7 +75,6 @@ export const LiveTerminal: React.FC = () => {
             </div>
           ))
         )}
-        <div ref={bottomRef} />
       </div>
     </div>
   );
