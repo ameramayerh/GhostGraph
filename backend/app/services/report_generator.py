@@ -54,6 +54,17 @@ def generate_pdf_report(engagement, findings, audit_logs) -> io.BytesIO:
     elements.append(info_table)
     elements.append(Spacer(1, 30))
 
+    # Table of Contents
+    elements.append(Paragraph("Table of Contents", h2_style))
+    toc_text = """
+    1. Introduction & Methodology<br/>
+    2. Executive Findings Summary<br/>
+    3. Vulnerability Catalogue<br/>
+    4. Detailed Finding Explanations & Remediation<br/>
+    """
+    elements.append(Paragraph(toc_text, normal_style))
+    elements.append(Spacer(1, 30))
+
     # Methodology / Explanation
     elements.append(Paragraph("How We Found These Vulnerabilities", h2_style))
     methodology_text = """
