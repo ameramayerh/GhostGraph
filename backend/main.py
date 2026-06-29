@@ -15,7 +15,7 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Allow requests from the Electron frontend
+# Allow requests from the frontend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], # Tighten this for production

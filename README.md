@@ -7,7 +7,7 @@ GhostGraph is an open-source Static Application Security Testing (SAST) and Soft
 *   **Multi-Engine Scanning**: Extracts and scans uploaded ZIP repositories using `semgrep` for SAST and `npm audit` for SCA.
 *   **Live Telemetry**: A real-time terminal built into the UI that intercepts and streams raw Uvicorn REST traffic and SQLAlchemy database queries via WebSockets.
 *   **Analytics Dashboard**: Visual reporting using Recharts to track scan metrics and severity distributions.
-*   **Cross-Platform Support**: Designed to run natively on Windows or within a Kali Linux VM.
+*   **Dockerized Environment**: Containerized frontend and backend for seamless, cross-platform deployment.
 
 ---
 
@@ -21,19 +21,16 @@ GhostGraph is an open-source Static Application Security Testing (SAST) and Soft
 
 ## How to Run the App
 
-We have provided convenient launcher scripts that handle virtual environments, dependency installations, and port forwarding for you.
+GhostGraph is now fully containerized using Docker.
 
-### Option 1: Running on Windows
-1. Double-click the **`start_ghostgraph.bat`** file located in the root of the project.
-2. The script will automatically open the backend and frontend terminals and launch your browser to `http://localhost:5173`.
-
-### Option 2: Running on Linux (e.g. Kali VM)
-1. Open a terminal in the GhostGraph directory.
-2. Run the launcher script:
+### Running with Docker Compose
+1. Ensure you have Docker and Docker Compose installed on your system.
+2. Open a terminal in the root of the GhostGraph directory.
+3. Run the following command to build and start the containers:
    ```bash
-   chmod +x start_ghostgraph.sh
-   ./start_ghostgraph.sh
+   docker-compose up --build
    ```
+4. Once the containers are running, open your browser and navigate to `http://localhost` to access the frontend, and `http://localhost:8000` for the backend API.
 
 ---
 
