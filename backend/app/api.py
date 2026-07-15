@@ -1,5 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File, Form, BackgroundTasks
-from fastapi.responses import Response
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File, BackgroundTasks
 from sqlmodel import Session, select, func, delete
 from typing import List
 import asyncio
@@ -8,6 +7,8 @@ import tempfile
 import zipfile
 import shutil
 import traceback
+from pathlib import Path
+from datetime import datetime
 
 from .models import Engagement, AuditLog, Finding, SystemSettings
 from .database import get_session
@@ -19,6 +20,32 @@ from .services.report_generator import generate_pdf_report
 from fastapi.responses import StreamingResponse
 
 router = APIRouter()
+MAX_UPLOAD_BYTES = 100 * 1024 * 1024
+MAX_EXTRACTED_BYTES = 500 * 1024 * 1024
+
+
+async def save_upload(file: UploadFile, destination: str) -> None:
+    """Persist an upload with a bounded size so scans cannot exhaust disk space."""
+    written = 0
+    with open(destination, "wb") as buffer:
+        while chunk := await file.read(1024 * 1024):
+            written += len(chunk)
+            if written > MAX_UPLOAD_BYTES:
+                raise HTTPException(status_code=413, detail="ZIP files must be 100 MB or smaller.")
+            buffer.write(chunk)
+
+
+def extract_zip_safely(zip_path: str, destination: str) -> None:
+    """Reject path-traversal and oversized archives before extracting them."""
+    destination_path = Path(destination).resolve()
+    with zipfile.ZipFile(zip_path, "r") as archive:
+        if sum(entry.file_size for entry in archive.infolist()) > MAX_EXTRACTED_BYTES:
+            raise HTTPException(status_code=413, detail="ZIP contents are too large to scan.")
+        for entry in archive.infolist():
+            target = (destination_path / entry.filename).resolve()
+            if not target.is_relative_to(destination_path):
+                raise HTTPException(status_code=400, detail="ZIP contains an unsafe file path.")
+        archive.extractall(destination_path)
 
 @router.post("/engagements", response_model=Engagement)
 def create_engagement(engagement: Engagement, session: Session = Depends(get_session)):
@@ -80,14 +107,12 @@ async def upload_and_scan(
     zip_path = os.path.join(temp_dir, "upload.zip")
     
     try:
-        with open(zip_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        await save_upload(file, zip_path)
             
         extract_dir = os.path.join(temp_dir, "extracted")
         os.makedirs(extract_dir, exist_ok=True)
         
-        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-            zip_ref.extractall(extract_dir)
+        extract_zip_safely(zip_path, extract_dir)
             
         await ws_manager.broadcast(f"Extraction complete. Starting SAST scan...", "info")
         
@@ -103,10 +128,11 @@ async def upload_and_scan(
         findings = sca_findings + sast_findings + ai_findings
         
         
+    except HTTPException:
+        raise
     except Exception as e:
         error_msg = str(e) or repr(e)
-        with open('error.txt', 'w') as f:
-            f.write(traceback.format_exc())
+        print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Scan failed: {error_msg}")
     finally:
         # Cleanup
@@ -328,6 +354,7 @@ def get_engagement_pdf_report(engagement_id: int, session: Session = Depends(get
 
 @router.get("/analytics")
 def get_analytics(session: Session = Depends(get_session)):
+    total_assets = session.exec(select(func.count(Engagement.id))).one()
     active_engagements = session.exec(select(func.count(Engagement.id)).where(Engagement.status == "Active")).one()
     
     severity_counts = session.exec(
@@ -338,9 +365,10 @@ def get_analytics(session: Session = Depends(get_session)):
         select(Finding.category, func.count(Finding.id)).group_by(Finding.category)
     ).all()
     
-    critical_risks = next((count for sev, count in severity_counts if sev == "High" or sev == "Critical"), 0)
+    critical_risks = sum(count for sev, count in severity_counts if sev in {"High", "Critical"})
     
     return {
+        "totalAssets": total_assets,
         "activeEngagements": active_engagements,
         "criticalRisks": critical_risks,
         "severityData": [{"name": sev, "value": count, "color": "#ef4444" if sev in ["High", "Critical"] else "#eab308" if sev == "Medium" else "#3b82f6"} for sev, count in severity_counts],
@@ -380,7 +408,12 @@ def get_settings(session: Session = Depends(get_session)):
         session.add(settings)
         session.commit()
         session.refresh(settings)
-    return settings
+    return {
+        "id": settings.id,
+        "llm_provider": settings.llm_provider,
+        "has_api_key": bool(settings.api_key),
+        "updated_at": settings.updated_at,
+    }
 
 @router.post("/settings")
 def update_settings(new_settings: SystemSettings, session: Session = Depends(get_session)):
@@ -392,11 +425,20 @@ def update_settings(new_settings: SystemSettings, session: Session = Depends(get
     settings.llm_provider = new_settings.llm_provider
     if new_settings.api_key:
         settings.api_key = new_settings.api_key
+    settings.updated_at = datetime.utcnow()
         
     session.add(settings)
     session.commit()
     session.refresh(settings)
-    return {"status": "success", "settings": settings}
+    return {
+        "status": "success",
+        "settings": {
+            "id": settings.id,
+            "llm_provider": settings.llm_provider,
+            "has_api_key": bool(settings.api_key),
+            "updated_at": settings.updated_at,
+        },
+    }
 
 @router.websocket("/ws/logs")
 async def websocket_endpoint(websocket: WebSocket):

@@ -1,22 +1,20 @@
 import { useEffect, useState } from 'react';
-import { Save, Server, Cpu, Clock, Key } from 'lucide-react';
+import { Save, Cpu, Key } from 'lucide-react';
 import { toast } from 'sonner';
+import { apiUrl } from '../../lib/api';
 
 export function SettingsPage() {
   const [llmProvider, setLlmProvider] = useState('local-llama3');
-  const [playwrightTimeout, setPlaywrightTimeout] = useState('15000');
-  const [maxDepth, setMaxDepth] = useState('3');
   const [apiKey, setApiKey] = useState('');
+  const [hasSavedApiKey, setHasSavedApiKey] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch('http://127.0.0.1:8000/api/settings')
+    fetch(apiUrl('/settings'))
       .then(res => res.json())
       .then(data => {
         setLlmProvider(data.llm_provider || 'local-llama3');
-        setPlaywrightTimeout(data.playwright_timeout?.toString() || '15000');
-        setMaxDepth(data.max_depth?.toString() || '3');
-        if (data.api_key) setApiKey(data.api_key);
+        setHasSavedApiKey(Boolean(data.has_api_key));
         setLoading(false);
       })
       .catch(() => {
@@ -28,19 +26,19 @@ export function SettingsPage() {
   const handleSave = async () => {
     const payload = {
       llm_provider: llmProvider,
-      playwright_timeout: parseInt(playwrightTimeout, 10),
-      max_depth: parseInt(maxDepth, 10),
       api_key: apiKey
     };
     
     try {
-      const res = await fetch('http://127.0.0.1:8000/api/settings', {
+      const res = await fetch(apiUrl('/settings'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
       if (!res.ok) throw new Error("Failed to save settings");
-      toast.success('Configuration saved successfully. System requires reboot to apply LLM changes.');
+      setHasSavedApiKey(Boolean(apiKey) || hasSavedApiKey);
+      setApiKey('');
+      toast.success('Configuration saved successfully. New scans will use the selected provider.');
     } catch (e: any) {
       toast.error(e.message);
     }
@@ -90,40 +88,9 @@ export function SettingsPage() {
                   onChange={(e) => setApiKey(e.target.value)}
                   className="w-full bg-gray-50 dark:bg-neutral-950 border border-gray-300 dark:border-neutral-700 rounded-md px-3 py-2 text-sm focus:ring-blue-500 focus:border-blue-500"
                 />
+                {hasSavedApiKey && !apiKey && <p className="mt-2 text-xs text-green-600 dark:text-green-400">An API key is already saved. Enter a new value only to replace it.</p>}
               </div>
             )}
-          </div>
-        </div>
-
-        {/* Playwright Scanner Settings */}
-        <div className="bg-white dark:bg-neutral-900 border border-gray-200 dark:border-neutral-800 rounded-xl overflow-hidden shadow-sm">
-          <div className="px-6 py-4 border-b border-gray-200 dark:border-neutral-800 bg-gray-50 dark:bg-neutral-950 flex items-center gap-2">
-            <Server size={18} className="text-gray-500" />
-            <h3 className="font-semibold">Playwright Deep Scanner</h3>
-          </div>
-          <div className="p-6 space-y-4">
-            <div className="grid grid-cols-2 gap-6">
-              <div>
-                <label className="block text-sm font-medium mb-2 flex items-center gap-2">
-                  <Clock size={14} /> Page Load Timeout (ms)
-                </label>
-                <input 
-                  type="number" 
-                  value={playwrightTimeout}
-                  onChange={(e) => setPlaywrightTimeout(e.target.value)}
-                  className="w-full bg-gray-50 dark:bg-neutral-950 border border-gray-300 dark:border-neutral-700 rounded-md px-3 py-2 text-sm focus:ring-blue-500 focus:border-blue-500"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-2">Max Crawl Depth</label>
-                <input 
-                  type="number" 
-                  value={maxDepth}
-                  onChange={(e) => setMaxDepth(e.target.value)}
-                  className="w-full bg-gray-50 dark:bg-neutral-950 border border-gray-300 dark:border-neutral-700 rounded-md px-3 py-2 text-sm focus:ring-blue-500 focus:border-blue-500"
-                />
-              </div>
-            </div>
           </div>
         </div>
 

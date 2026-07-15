@@ -1,5 +1,4 @@
-import React from 'react';
-import { Shield, LayoutDashboard, History, Settings, PieChart, Database, HelpCircle } from 'lucide-react';
+import { Shield, LayoutDashboard, Settings, PieChart, Database, HelpCircle } from 'lucide-react';
 import { Link, useLocation } from 'react-router-dom';
 
 export function Sidebar({ onTourClick }: { onTourClick?: () => void }) {

@@ -1,6 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Database, Search, ShieldCheck } from 'lucide-react';
 import { toast } from 'sonner';
+import { apiUrl } from '../../lib/api';
 
 export function ThreatIntelView() {
   const [query, setQuery] = useState('');
@@ -8,7 +9,7 @@ export function ThreatIntelView() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch('http://127.0.0.1:8000/api/threat-intel')
+    fetch(apiUrl('/threat-intel'))
       .then(res => {
         if (!res.ok) throw new Error('Failed to fetch threat intel');
         return res.json();

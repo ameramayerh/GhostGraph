@@ -1,8 +1,11 @@
 fastapi
 uvicorn[standard]
 sqlmodel
-playwright
+python-multipart
 ollama
+google-genai
+semgrep
+chromadb
+reportlab
+requests
 pytest
-google-genai  
- 

@@ -7,6 +7,7 @@ import { AnalyticsDashboard } from './components/analytics/AnalyticsDashboard';
 import { ThreatIntelView } from './components/intel/ThreatIntelView';
 import { SettingsPage } from './components/settings/SettingsPage';
 import { LiveTerminal } from './components/LiveTerminal';
+import { apiUrl } from './lib/api';
 import { Shield, FileText, Activity, Clock, Code } from 'lucide-react';
 import { Toaster, toast } from 'sonner';
 
@@ -17,7 +18,7 @@ function DashboardLayout() {
 
   const fetchEngagements = async () => {
     try {
-      const res = await fetch('http://127.0.0.1:8000/api/engagements');
+      const res = await fetch(apiUrl('/engagements'));
       if (res.ok) {
         const data = await res.json();
         setEngagements(data);
@@ -176,7 +177,7 @@ function EngagementDetail() {
 
   const fetchEngagementData = async () => {
     try {
-      const res = await fetch(`http://127.0.0.1:8000/api/engagements/${id}/details`);
+        const res = await fetch(apiUrl(`/engagements/${id}/details`));
       if (res.ok) {
         const details = await res.json();
         setData(details);
@@ -197,7 +198,7 @@ function EngagementDetail() {
     formData.append('file', file);
     
     try {
-      const res = await fetch(`http://127.0.0.1:8000/api/engagements/${id}/scan`, {
+      const res = await fetch(apiUrl(`/engagements/${id}/scan`), {
         method: 'POST',
         body: formData
       });
@@ -222,7 +223,7 @@ function EngagementDetail() {
     setAnalyzingId(findingId);
     const toastId = toast.loading('GhostGraph AI is reviewing this code snippet...');
     try {
-      const res = await fetch(`http://127.0.0.1:8000/api/findings/${findingId}/analyze`, { method: 'POST' });
+      const res = await fetch(apiUrl(`/findings/${findingId}/analyze`), { method: 'POST' });
       if (!res.ok) {
         const errData = await res.json().catch(() => ({ detail: 'Unknown error' }));
         throw new Error(errData.detail || `Server returned ${res.status}`);
@@ -259,7 +260,7 @@ function EngagementDetail() {
           <button 
             onClick={() => {
               const link = document.createElement('a');
-              link.href = `http://127.0.0.1:8000/api/engagements/${id}/report/pdf`;
+              link.href = apiUrl(`/engagements/${id}/report/pdf`);
               link.download = `report_${id}.pdf`;
               document.body.appendChild(link);
               link.click();
@@ -270,7 +271,7 @@ function EngagementDetail() {
             <FileText size={16}/> Export Report
           </button>
           
-          <label className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-md text-sm font-medium flex items-center gap-2 transition-colors shadow-sm cursor-pointer disabled:opacity-50">
+          <label id="btn-upload-scan" className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-md text-sm font-medium flex items-center gap-2 transition-colors shadow-sm cursor-pointer disabled:opacity-50">
             <Activity size={16} className={uploading ? "animate-pulse" : ""} />
             {uploading ? 'Scanning...' : 'Upload & Scan Source ZIP'}
             <input 

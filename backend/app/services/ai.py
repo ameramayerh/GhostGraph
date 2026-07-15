@@ -98,6 +98,26 @@ class AISecurityOrchestrator:
         self.risk_agent = RiskExecutiveAgent()
         self.remed_agent = RemediationAgent()
 
+    def generate(self, prompt: str, provider: str = "local-llama3", api_key: str = None) -> str:
+        """Return raw model output for the AI Hunter when an explicitly configured provider is available."""
+        if "gemini" in provider.lower():
+            if not api_key:
+                raise RuntimeError("Gemini API Key is required for AI Hunting")
+            try:
+                from google import genai
+                client = genai.Client(api_key=api_key)
+                response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+                return response.text or "[]"
+            except Exception as e:
+                raise RuntimeError(f"Gemini API failed: {e}")
+
+        model_name = "mistral" if "mistral" in provider.lower() else "llama3"
+        available, message = check_ollama_available(model_name)
+        if not available:
+            raise RuntimeError(message)
+        response = ollama.chat(model=model_name, messages=[{"role": "user", "content": prompt}])
+        return response["message"]["content"]
+
     def analyze_finding(self, title: str, description: str, evidence: str, provider: str = "local-llama3", api_key: str = None) -> dict:
         if "gemini" in provider.lower():
             if not api_key:

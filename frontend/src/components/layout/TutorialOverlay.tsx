@@ -28,10 +28,10 @@ export const TutorialOverlay: React.FC<TutorialOverlayProps> = ({ onClose }) => 
       highlightId: "nav-engagements"
     },
     {
-      title: "2. Launch Deep Scans",
-      description: "Inside an active engagement, click 'Run Deep Scan'. GhostGraph will spawn headless browsers to emulate real attackers, bypassing WAFs and analyzing traffic.",
+      title: "2. Scan Your Source Code",
+      description: "Inside an active engagement, upload a ZIP file using 'Upload & Scan Source ZIP'. GhostGraph checks dependencies, source-code patterns, and important authentication or route files.",
       icon: <Activity className="w-12 h-12 text-red-400 mb-4" />,
-      highlightId: "btn-deep-scan" // We will add these IDs to the respective elements
+      highlightId: "btn-upload-scan"
     },
     {
       title: "3. AI Threat Remediation",

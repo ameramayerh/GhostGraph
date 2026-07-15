@@ -1,25 +1,36 @@
 import chromadb
-from chromadb.config import Settings
-import json
+import hashlib
 import os
+import re
+from typing import List
 
 class ThreatIntelService:
     def __init__(self):
-        # Initialize ChromaDB client pointing to local persistence directory
-        db_path = os.path.join(os.path.dirname(__file__), "..", "..", "vectordb")
+        # Keep generated vector data outside tracked source files. Docker supplies
+        # /app/data as a persistent volume; local runs use backend/data.
+        default_data_dir = os.path.join(os.path.dirname(__file__), "..", "..", "data", "vectordb")
+        db_path = os.getenv("GHOSTGRAPH_VECTOR_DB_PATH", default_data_dir)
         os.makedirs(db_path, exist_ok=True)
         
         self.client = chromadb.PersistentClient(path=db_path)
         
         # Create or get the collection for Threat Intelligence
-        self.collection = self.client.get_or_create_collection(name="threat_intelligence")
+        # Embeddings are supplied by GhostGraph itself. This avoids Chroma downloading a
+        # sentence-transformer model the first time the app starts.
+        self.collection = self.client.get_or_create_collection(
+            name="threat_intelligence", embedding_function=None
+        )
         
         # Mock ingestion of NVD / MITRE STIX JSON feeds if empty
         if self.collection.count() == 0:
             self._ingest_initial_feeds()
 
     def _ingest_initial_feeds(self):
-        """Fetches and ingests the live CISA KEV catalog."""
+        """Optionally fetches CISA KEV, otherwise seeds a useful offline catalog."""
+        if os.getenv("GHOSTGRAPH_FETCH_THREAT_INTEL", "false").lower() not in {"1", "true", "yes"}:
+            self._ingest_mock_data()
+            return
+
         print("Ingesting CISA Known Exploited Vulnerabilities into ChromaDB...")
         try:
             import requests
@@ -51,7 +62,8 @@ class ThreatIntelService:
                     self.collection.add(
                         documents=documents[i:i+batch_size],
                         ids=ids[i:i+batch_size],
-                        metadatas=metadatas[i:i+batch_size]
+                        metadatas=metadatas[i:i+batch_size],
+                        embeddings=[self._embed(document) for document in documents[i:i+batch_size]],
                     )
                 print(f"Ingested {len(documents)} live threat intel records from CISA.")
         except Exception as e:
@@ -70,13 +82,24 @@ class ThreatIntelService:
             "NVD CVE-2023-XXXX: Missing authentication on GraphQL endpoints allows unauthorized data exfiltration.",
         ]
         
-        # Add to vector DB (Chroma handles embedding automatically via sentence-transformers default)
         ids = [f"intel_{i}" for i in range(len(documents))]
         self.collection.add(
             documents=documents,
-            ids=ids
+            ids=ids,
+            metadatas=[{"source": "Built-in GhostGraph guidance", "type": "Security Guidance"} for _ in documents],
+            embeddings=[self._embed(document) for document in documents],
         )
         print(f"Ingested {len(documents)} threat intel records.")
+
+    @staticmethod
+    def _embed(text: str, dimensions: int = 64) -> List[float]:
+        """Create a small deterministic local vector; it needs no model download."""
+        vector = [0.0] * dimensions
+        for token in re.findall(r"[a-z0-9_]+", text.lower()):
+            index = int.from_bytes(hashlib.sha256(token.encode("utf-8")).digest()[:4], "big") % dimensions
+            vector[index] += 1.0
+        length = sum(value * value for value in vector) ** 0.5
+        return [value / length for value in vector] if length else vector
 
     def retrieve_context(self, finding_title: str, description: str = "") -> str:
         """
@@ -85,7 +108,7 @@ class ThreatIntelService:
         query_text = f"{finding_title} {description}"
         try:
             results = self.collection.query(
-                query_texts=[query_text],
+                query_embeddings=[self._embed(query_text)],
                 n_results=2
             )
             if results['documents'] and len(results['documents'][0]) > 0:

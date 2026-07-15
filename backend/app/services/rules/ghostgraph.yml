@@ -1,0 +1,31 @@
+rules:
+  - id: ghostgraph.javascript.eval
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: "eval executes a string as code. Avoid it because untrusted input can become arbitrary program behavior."
+    pattern: eval($CODE)
+
+  - id: ghostgraph.javascript.child-process-exec
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: "child_process.exec invokes a shell. Prefer execFile or spawn with a fixed executable and validated arguments."
+    pattern: exec($COMMAND)
+
+  - id: ghostgraph.javascript.unsafe-innerhtml
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: "Writing dynamic content with innerHTML can create cross-site scripting. Use textContent or sanitize trusted HTML."
+    pattern: $ELEMENT.innerHTML = $VALUE
+
+  - id: ghostgraph.javascript.hardcoded-secret
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: "A value that looks like a credential is hardcoded in source. Move secrets to protected environment configuration and rotate it."
+    patterns:
+      - pattern-either:
+          - pattern: const $KEY = "$VALUE"
+          - pattern: let $KEY = "$VALUE"
+          - pattern: var $KEY = "$VALUE"
+      - metavariable-regex:
+          metavariable: $KEY
+          regex: '(?i)^(api[_-]?key|apikey|secret|password|token)$'

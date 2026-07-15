@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { ShieldAlert, CheckCircle2 } from 'lucide-react';
+import { apiUrl } from '../../lib/api';
 
 interface Engagement {
   name: string;
@@ -18,7 +19,7 @@ export function CreateEngagementForm({ onSuccess }: { onSuccess: () => void }) {
     setError('');
 
     try {
-      const response = await fetch('http://127.0.0.1:8000/api/engagements', {
+      const response = await fetch(apiUrl('/engagements'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(formData)

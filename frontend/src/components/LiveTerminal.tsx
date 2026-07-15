@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { Terminal } from 'lucide-react';
+import { logsWebSocketUrl } from '../lib/api';
 
 interface LogMessage {
   level: string;
@@ -13,7 +14,7 @@ export const LiveTerminal: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    ws.current = new WebSocket('ws://127.0.0.1:8000/api/ws/logs');
+    ws.current = new WebSocket(logsWebSocketUrl);
     
     ws.current.onmessage = (event) => {
       try {

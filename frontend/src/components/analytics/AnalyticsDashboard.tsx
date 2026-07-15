@@ -1,7 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer } from 'recharts';
 import { Activity, ShieldAlert, Target } from 'lucide-react';
 import { toast } from 'sonner';
+import { apiUrl } from '../../lib/api';
 
 export function AnalyticsDashboard() {
   const [data, setData] = useState({
@@ -14,7 +15,7 @@ export function AnalyticsDashboard() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch('http://127.0.0.1:8000/api/analytics')
+    fetch(apiUrl('/analytics'))
       .then(res => {
         if (!res.ok) throw new Error('Failed to fetch analytics');
         return res.json();

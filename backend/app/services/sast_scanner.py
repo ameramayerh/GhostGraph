@@ -30,7 +30,13 @@ async def run_npm_audit(engagement_id: int, target_dir: str) -> List[Finding]:
     """Runs Software Composition Analysis (SCA) using npm audit to detect vulnerable dependencies and CVEs."""
     findings = []
     package_json_path = os.path.join(target_dir, "package.json")
-    
+    if not os.path.exists(package_json_path):
+        for root, dirs, files in os.walk(target_dir):
+            dirs[:] = [directory for directory in dirs if directory not in {"node_modules", ".git"}]
+            if "package.json" in files:
+                package_json_path = os.path.join(root, "package.json")
+                break
+
     if not os.path.exists(package_json_path):
         return findings
 
@@ -40,12 +46,18 @@ async def run_npm_audit(engagement_id: int, target_dir: str) -> List[Finding]:
         # We use --audit-level=moderate to filter out low severity noise
         process = await asyncio.create_subprocess_exec(
             "npm.cmd" if os.name == "nt" else "npm", "audit", "--json",
-            cwd=target_dir,
+            cwd=os.path.dirname(package_json_path),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
         
-        stdout, stderr = await process.communicate()
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=60)
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.communicate()
+            await ws_manager.broadcast("npm audit timed out after 60 seconds; continuing with static analysis.", "error")
+            return findings
         
         # npm audit exits with non-zero code if vulnerabilities are found, so we don't check returncode
         if stdout:
@@ -79,7 +91,7 @@ async def run_npm_audit(engagement_id: int, target_dir: str) -> List[Finding]:
                         engagement_id=engagement_id,
                         title=f"SCA: {pkg_name} ({cve})",
                         description=desc[:1000],
-                        file_path="package.json",
+                        file_path=os.path.relpath(package_json_path, target_dir),
                         line_number=1, # Defaulting to top of file
                         code_snippet=f"\"dependencies\": {{\n  ...\"{pkg_name}\": \"...\"\n}}",
                         semgrep_rule_id="npm-audit-cve",
@@ -114,10 +126,7 @@ async def run_semgrep_scan(engagement_id: int, target_dir: str) -> List[Finding]
     cmd = [
         semgrep_path, "scan",
         "--json",
-        "--config", "p/default",
-        "--config", "p/owasp-top-ten",
-        "--config", "p/security-audit",
-        "--config", "p/cwe-top-25",
+        "--config", os.path.join(os.path.dirname(__file__), "rules", "ghostgraph.yml"),
         "--exclude", "*test*",
         "--exclude", "*spec*",
         "--exclude", "node_modules",
@@ -128,13 +137,6 @@ async def run_semgrep_scan(engagement_id: int, target_dir: str) -> List[Finding]
         "--exclude", ".github",
         "--exclude", ".gitlab",
         "--exclude", "Jenkinsfile",
-        "--exclude", "*sample*",
-        "--exclude", "*example*",
-        "--exclude", "*mock*",
-        "--exclude", "*docs*",
-        "--exclude", "*tutorial*",
-        "--exclude", "*demo*",
-        "--exclude", "*lesson*",
         target_dir
     ]
 
@@ -145,7 +147,13 @@ async def run_semgrep_scan(engagement_id: int, target_dir: str) -> List[Finding]
             stderr=asyncio.subprocess.PIPE
         )
         
-        stdout, stderr = await process.communicate()
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=120)
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.communicate()
+            await ws_manager.broadcast("Semgrep timed out after 120 seconds; continuing without SAST results.", "error")
+            return findings
         
         if stdout:
             try:
@@ -177,7 +185,7 @@ async def run_semgrep_scan(engagement_id: int, target_dir: str) -> List[Finding]
                         engagement_id=engagement_id,
                         title=title,
                         description=extra.get("message", "No description provided.")[:1000],
-                        file_path=file_path,
+                        file_path=os.path.relpath(file_path, target_dir) if os.path.isabs(file_path) else file_path,
                         line_number=line_number,
                         code_snippet=extract_code_snippet(file_path, line_number) or extra.get("lines", ""),
                         semgrep_rule_id=result.get("check_id", "Unknown"),

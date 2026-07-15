@@ -30,6 +30,10 @@ def on_startup():
 
 app.include_router(api_router, prefix="/api")
 
+@app.get("/api/health")
+def health_check():
+    return {"status": "ok", "service": "ghostgraph"}
+
 @app.get("/")
 def read_root():
     return {"message": "GhostGraph Backend API is running."}

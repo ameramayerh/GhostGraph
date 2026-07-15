@@ -1,23 +1,25 @@
-
 services:
   backend:
     build:
       context: ./backend
-      dockerfile: Dockerfile
     ports:
       - "8000:8000"
     volumes:
-      - ./backend/vectordb:/app/vectordb
-      - ./backend/database_v2.db:/app/database_v2.db
+      - ghostgraph_data:/app/data
     environment:
-      - HOST=0.0.0.0
-      - OLLAMA_HOST=http://host.docker.internal:11434
+      DATABASE_URL: sqlite:////app/data/ghostgraph.db
+      GHOSTGRAPH_VECTOR_DB_PATH: /app/data/vectordb
+      OLLAMA_HOST: http://host.docker.internal:11434
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   frontend:
     build:
       context: ./frontend
-      dockerfile: Dockerfile
     ports:
-      - "80:80"
+      - "8080:80"
     depends_on:
       - backend
+
+volumes:
+  ghostgraph_data:

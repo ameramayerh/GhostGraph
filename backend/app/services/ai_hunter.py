@@ -5,7 +5,7 @@ import asyncio
 from typing import List
 from ..models import Finding
 from .logger import ws_manager
-from .ai import ai_analyst
+from .ai import ai_analyst, check_ollama_available
 from sqlmodel import Session, select
 from ..models import SystemSettings
 from ..database import engine
@@ -52,6 +52,24 @@ async def run_ai_hunter(engagement_id: int, target_dir: str) -> List[Finding]:
         settings = session.exec(select(SystemSettings)).first()
         llm_provider = settings.llm_provider if settings else "local-llama3"
         api_key = settings.api_key if settings else None
+
+    # AI is an optional enrichment feature. Do one availability check rather
+    # than making every uploaded file wait for a failed model connection.
+    if "gemini" in llm_provider.lower():
+        if not api_key:
+            await ws_manager.broadcast("AI Hunter skipped: configure a Gemini API key to enable it.", "info")
+            return findings
+    else:
+        model_name = "mistral" if "mistral" in llm_provider.lower() else "llama3"
+        try:
+            available, message = await asyncio.wait_for(
+                asyncio.to_thread(check_ollama_available, model_name), timeout=3
+            )
+        except asyncio.TimeoutError:
+            available, message = False, "Ollama availability check timed out."
+        if not available:
+            await ws_manager.broadcast(f"AI Hunter skipped: {message}", "info")
+            return findings
 
     prompt_template = """
 You are an expert Application Security Penetration Tester.
@@ -119,7 +137,10 @@ Code:
                     if isinstance(vulns, list):
                         for vuln in vulns:
                             # Try to extract a snippet around the reported line
-                            line_num = vuln.get("line_number", 1)
+                            try:
+                                line_num = max(1, int(vuln.get("line_number", 1)))
+                            except (TypeError, ValueError):
+                                line_num = 1
                             lines = code.split('\\n')
                             start = max(0, line_num - 5)
                             end = min(len(lines), line_num + 5)
