@@ -1,284 +1,222 @@
-import ollama
 import json
+from typing import Optional
+
+import ollama
+
 from .threat_intel import threat_intel_db
 
-class VulnAnalystAgent:
-    def analyze(self, title: str, description: str, evidence: str, threat_context: str, model: str) -> str:
-        prompt = f"""You are GhostGraph AI, an Educational Security Pair Programmer.
 
-Your goal is to explain this static analysis finding to a developer so they understand the root cause.
-Focus on:
-1. WHAT: Explain conceptually why this vulnerability category exists.
-2. WHERE: Point out the exact code snippet provided in the evidence.
-3. WHY: Explain what developer mistakes commonly cause this, and what conditions make it dangerous.
-
-IMPORTANT RULES:
-- The goal is education and prevention.
-- NEVER invent vulnerabilities or evidence.
-- NEVER provide exploit payloads, attack instructions, or step-by-step guidance for compromising systems.
-- Explain things clearly and supportively.
-
-Title: {title}
-Description: {description}
-Evidence (File and Code): {evidence}
-Threat Intel Context: {threat_context}
-
-Return only your educational explanation text. Keep it structured and easy to read."""
-        response = ollama.chat(model=model, messages=[{"role": "user", "content": prompt}])
-        return response['message']['content']
-
-class RiskExecutiveAgent:
-    def assess(self, title: str, explanation: str, threat_context: str, model: str) -> str:
-        prompt = f"""You are GhostGraph AI.
-
-Based on the technical explanation, explain the potential Business Impact of this vulnerability if this code were deployed to production.
-Focus on:
-- Organizational consequences
-- Potential data exposure
-
-IMPORTANT: Do NOT provide any exploitation details. Focus purely on the business risk of writing insecure code.
-
-Title: {title}
-Technical Explanation: {explanation}
-Threat Intel Context: {threat_context}
-
-Return only the business impact text. Keep it concise (2-4 sentences max)."""
-        response = ollama.chat(model=model, messages=[{"role": "user", "content": prompt}])
-        return response['message']['content']
-
-class RemediationAgent:
-    def patch(self, title: str, evidence: str, model: str) -> tuple[str, str, str]:
-        prompt = f"""You are GhostGraph AI's Secure Refactoring Assistant.
-
-Provide secure coding alternatives and defensive remediation steps for this code snippet.
-
-IMPORTANT RULES:
-- Provide specific, secure refactoring alternatives (e.g. use parameterized queries instead of concatenation).
-- Explain WHY the secure approach is better.
-- NEVER generate exploit code.
-
-Title: {title}
-Evidence (File and Code): {evidence}
-
-Provide your response strictly as JSON with three keys:
-- "remediation_steps": Step-by-step guidance on how to write this securely.
-- "code_patch": An example of what the secure code should look like.
-- "confidence_level": High, Medium, or Low.
-"""
-        response = ollama.chat(model=model, messages=[{"role": "user", "content": prompt}], format="json")
-        try:
-            res = json.loads(response['message']['content'])
-            rem = res.get("remediation_steps", "")
-            patch = res.get("code_patch", "")
-            if isinstance(rem, list) or isinstance(rem, dict):
-                rem = json.dumps(rem, indent=2)
-            if isinstance(patch, list) or isinstance(patch, dict):
-                patch = json.dumps(patch, indent=2)
-            return str(rem), str(patch), str(res.get("confidence_level", "Unknown"))
-        except json.JSONDecodeError:
-            return "Review secure coding guidelines for this framework.", "No patch generated.", "Low"
+LOCAL_MODELS = {
+    "local-llama3": "llama3",
+    "local-mistral": "mistral",
+}
+GEMINI_PROVIDER = "gemini-2.5-flash"
+SUPPORTED_LLM_PROVIDERS = frozenset([*LOCAL_MODELS, GEMINI_PROVIDER])
 
 
 def check_ollama_available(model_name: str = "llama3") -> tuple[bool, str]:
     try:
         models = ollama.list()
-        available = [m.model for m in models.models] if hasattr(models, 'models') else []
-        model_found = any(m.startswith(model_name) for m in available)
-        if not model_found:
-            return False, f"Ollama is running but model '{model_name}' is not installed. Run: ollama pull {model_name}"
+        available = [model.model for model in models.models] if hasattr(models, "models") else []
+        if not any(model.startswith(model_name) for model in available):
+            return False, f"Ollama is running, but model '{model_name}' is not installed. Run: ollama pull {model_name}"
         return True, "OK"
-    except Exception as e:
-        return False, f"Cannot connect to Ollama. Make sure it is running. Error: {str(e)}"
+    except Exception as error:
+        return False, f"Cannot connect to Ollama: {error}"
 
 
-class AISecurityOrchestrator:
-    def __init__(self, model_name="llama3"):
-        self.model_name = model_name
-        self.vuln_agent = VulnAnalystAgent()
-        self.risk_agent = RiskExecutiveAgent()
-        self.remed_agent = RemediationAgent()
+def _gemini_client(api_key: Optional[str]):
+    if not api_key:
+        raise RuntimeError("A Gemini API key is required.")
+    from google import genai
 
-    def generate(self, prompt: str, provider: str = "local-llama3", api_key: str = None) -> str:
-        """Return raw model output for the AI Hunter when an explicitly configured provider is available."""
-        if "gemini" in provider.lower():
-            if not api_key:
-                raise RuntimeError("Gemini API Key is required for AI Hunting")
-            try:
-                from google import genai
-                client = genai.Client(api_key=api_key)
-                response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
-                return response.text or "[]"
-            except Exception as e:
-                raise RuntimeError(f"Gemini API failed: {e}")
+    return genai.Client(api_key=api_key)
 
-        model_name = "mistral" if "mistral" in provider.lower() else "llama3"
-        available, message = check_ollama_available(model_name)
-        if not available:
-            raise RuntimeError(message)
-        response = ollama.chat(model=model_name, messages=[{"role": "user", "content": prompt}])
+
+class FindingExplainer:
+    def analyze(self, title: str, description: str, evidence: str, threat_context: str, model: str) -> str:
+        prompt = f"""You are an application-security reviewer helping a developer understand a scanner finding.
+
+Explain the vulnerability category, identify the relevant evidence, and describe the conditions that make it risky.
+Do not invent evidence or provide exploitation instructions.
+
+Title: {title}
+Description: {description}
+Evidence: {evidence}
+Threat-intelligence context: {threat_context}
+"""
+        response = ollama.chat(model=model, messages=[{"role": "user", "content": prompt}])
         return response["message"]["content"]
 
-    def analyze_finding(self, title: str, description: str, evidence: str, provider: str = "local-llama3", api_key: str = None) -> dict:
-        if "gemini" in provider.lower():
-            if not api_key:
-                raise RuntimeError("API Key is required for Gemini")
+
+class RiskAssessor:
+    def assess(self, title: str, explanation: str, threat_context: str, model: str) -> str:
+        prompt = f"""Summarize the likely business impact of this application-security finding in two to four sentences.
+Focus on data exposure, service integrity, and operational consequences. Do not provide exploitation steps.
+
+Title: {title}
+Technical explanation: {explanation}
+Threat-intelligence context: {threat_context}
+"""
+        response = ollama.chat(model=model, messages=[{"role": "user", "content": prompt}])
+        return response["message"]["content"]
+
+
+class RemediationAdvisor:
+    def patch(self, title: str, evidence: str, model: str) -> tuple[str, str, str]:
+        prompt = f"""Provide defensive remediation guidance for this scanner finding.
+Return JSON with the keys remediation_steps, code_patch, and confidence_level.
+
+Title: {title}
+Evidence: {evidence}
+"""
+        response = ollama.chat(model=model, messages=[{"role": "user", "content": prompt}], format="json")
+        try:
+            result = json.loads(response["message"]["content"])
+            remediation = result.get("remediation_steps", "")
+            patch = result.get("code_patch", "")
+            if isinstance(remediation, (list, dict)):
+                remediation = json.dumps(remediation, indent=2)
+            if isinstance(patch, (list, dict)):
+                patch = json.dumps(patch, indent=2)
+            return str(remediation), str(patch), str(result.get("confidence_level", "Unknown"))
+        except json.JSONDecodeError:
+            return "Review the secure coding guidance for this framework.", "No patch generated.", "Low"
+
+
+class AIAnalysisService:
+    def __init__(self):
+        self.explainer = FindingExplainer()
+        self.risk_assessor = RiskAssessor()
+        self.remediation_advisor = RemediationAdvisor()
+
+    @staticmethod
+    def _local_model(provider: str) -> str:
+        try:
+            return LOCAL_MODELS[provider]
+        except KeyError as error:
+            raise RuntimeError(f"Unsupported AI provider: {provider}") from error
+
+    def provider_available(self, provider: str, api_key: Optional[str] = None) -> tuple[bool, str]:
+        if provider == GEMINI_PROVIDER:
+            return (True, "OK") if api_key else (False, "A Gemini API key is not configured.")
+        if provider in LOCAL_MODELS:
+            return check_ollama_available(LOCAL_MODELS[provider])
+        return False, f"Unsupported AI provider: {provider}"
+
+    def generate(self, prompt: str, provider: str = "local-llama3", api_key: Optional[str] = None) -> str:
+        if provider == GEMINI_PROVIDER:
             try:
-                from google import genai
-                from google.genai import types
-                client = genai.Client(api_key=api_key)
-                prompt = f"""You are GhostGraph AI, an Educational Security Pair Programmer.
-                
-                Analyze the following vulnerability:
-                Title: {title}
-                Description: {description}
-                Evidence: {evidence}
-                
-                Provide your response strictly as JSON with the following keys:
-                - "explanation": Explain conceptually why this vulnerability exists and what mistakes cause it.
-                - "business_impact": The potential organizational consequence if deployed.
-                - "remediation": Step-by-step guidance on writing it securely.
-                - "code_patch": Secure refactored code snippet.
-                - "confidence": High, Medium, or Low.
-                """
-                response = client.models.generate_content(
-                    model='gemini-2.5-flash',
-                    contents=prompt,
-                    config=types.GenerateContentConfig(response_mime_type="application/json")
+                response = _gemini_client(api_key).models.generate_content(
+                    model="gemini-2.5-flash", contents=prompt
                 )
-                res = json.loads(response.text)
-                return {
-                    "explanation": str(res.get("explanation", "")),
-                    "business_impact": str(res.get("business_impact", "")),
-                    "remediation": str(res.get("remediation", "")),
-                    "code_patch": str(res.get("code_patch", "")),
-                    "confidence": str(res.get("confidence", "Unknown"))
-                }
-            except Exception as e:
-                raise RuntimeError(f"Gemini API failed: {str(e)}")
+                return response.text or "[]"
+            except Exception as error:
+                raise RuntimeError(f"Gemini request failed: {error}") from error
 
-        if "cloud" in provider.lower() or "openai" in provider.lower() or "anthropic" in provider.lower():
-            if not api_key:
-                raise RuntimeError(f"API Key is required for {provider}")
-            return {
-                "explanation": f"[{provider} Cloud Analysis] This code pattern is insecure and can lead to vulnerabilities.",
-                "business_impact": "Potential compliance violations and data exposure if deployed.",
-                "remediation": "Refactor the code to use secure APIs.",
-                "code_patch": "// Example secure code implementation\nsecure_function(safe_input);",
-                "confidence": "High"
-            }
-
-        model_name = "mistral" if "mistral" in provider else "llama3"
-
-        available, msg = check_ollama_available(model_name)
+        model = self._local_model(provider)
+        available, message = check_ollama_available(model)
         if not available:
-            raise RuntimeError(msg)
+            raise RuntimeError(message)
+        response = ollama.chat(model=model, messages=[{"role": "user", "content": prompt}])
+        return response["message"]["content"]
+
+    def analyze_finding(
+        self,
+        title: str,
+        description: str,
+        evidence: str,
+        provider: str = "local-llama3",
+        api_key: Optional[str] = None,
+    ) -> dict:
+        if provider == GEMINI_PROVIDER:
+            prompt = f"""Analyze this application-security finding and return JSON with the keys explanation,
+business_impact, remediation, code_patch, and confidence.
+
+Title: {title}
+Description: {description}
+Evidence: {evidence}
+"""
+            try:
+                from google.genai import types
+
+                response = _gemini_client(api_key).models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=prompt,
+                    config=types.GenerateContentConfig(response_mime_type="application/json"),
+                )
+                result = json.loads(response.text)
+                return {
+                    "explanation": str(result.get("explanation", "")),
+                    "business_impact": str(result.get("business_impact", "")),
+                    "remediation": str(result.get("remediation", "")),
+                    "code_patch": str(result.get("code_patch", "")),
+                    "confidence": str(result.get("confidence", "Unknown")),
+                }
+            except Exception as error:
+                raise RuntimeError(f"Gemini request failed: {error}") from error
+
+        model = self._local_model(provider)
+        available, message = check_ollama_available(model)
+        if not available:
+            raise RuntimeError(message)
 
         try:
-            threat_context = threat_intel_db.retrieve_context(title, description)
-            
-            explanation = self.vuln_agent.analyze(title, description, evidence, threat_context, model_name)
-            impact = self.risk_agent.assess(title, explanation, threat_context, model_name)
-            rem_steps, code_patch, confidence = self.remed_agent.patch(title, evidence, model_name)
-            
+            context = threat_intel_db.retrieve_context(title, description)
+            explanation = self.explainer.analyze(title, description, evidence, context, model)
+            impact = self.risk_assessor.assess(title, explanation, context, model)
+            remediation, code_patch, confidence = self.remediation_advisor.patch(title, evidence, model)
             return {
                 "explanation": explanation,
                 "business_impact": impact,
-                "remediation": rem_steps,
+                "remediation": remediation,
                 "code_patch": code_patch,
-                "confidence": confidence
+                "confidence": confidence,
             }
-        except RuntimeError:
-            raise 
-        except Exception as e:
-            raise RuntimeError(f"AI analysis failed: {str(e)}")
+        except Exception as error:
+            raise RuntimeError(f"AI analysis failed: {error}") from error
 
-    def evaluate_false_positive(self, title: str, description: str, evidence: str, provider: str = "local-llama3", api_key: str = None) -> dict:
-        if "gemini" in provider.lower():
-            if not api_key:
-                return {"is_false_positive": False, "reason": "Gemini API Key missing. Defaulting to true positive."}
-            try:
-                from google import genai
-                from google.genai import types
-                client = genai.Client(api_key=api_key)
-                prompt = f"""You are GhostGraph AI's False Positive Reduction Engine.
-A static analysis scanner has flagged the following code snippet. 
-Your job is to determine if this is a FALSE POSITIVE (e.g., test code, a mock, unused code, or perfectly safe context) or a TRUE VULNERABILITY (dangerous code that could run in production).
-
-CRITICAL DIRECTIVE: You must default to treating this as a TRUE VULNERABILITY (is_real_vulnerability: true). 
-You may ONLY mark it as a False Positive (is_real_vulnerability: false) IF AND ONLY IF you see absolute proof in the snippet that it is safe, such as:
-1. The code explicitly hardcodes a safely sanitized, static string.
-2. The file path explicitly contains "test", "mock", or "spec".
-3. A secret key is literally "secret", "password", "test", or similar mock data.
-
-If a variable's origin is UNKNOWN or NOT VISIBLE in the snippet, you MUST ASSUME it is attacker-controlled and mark it as a TRUE VULNERABILITY. Do not guess that it is safe.
+    def evaluate_false_positive(
+        self,
+        title: str,
+        description: str,
+        evidence: str,
+        provider: str = "local-llama3",
+        api_key: Optional[str] = None,
+    ) -> dict:
+        prompt = f"""Review this static-analysis finding conservatively.
+Return JSON with is_real_vulnerability (boolean) and reason (one sentence).
+Treat the finding as real unless the evidence clearly proves it is test-only, unreachable, or safely sanitized.
 
 Title: {title}
 Description: {description}
-Code Snippet:
-{evidence}
-
-Analyze the code. Does this look like a real, reachable vulnerability in production logic, or is it just test data, demo secrets, or unreachable noise?
-Provide your response strictly as JSON with two keys:
-- "is_real_vulnerability": A boolean (true if it is a real dangerous vulnerability, false if it is safe, test code, or unreachable noise).
-- "reason": A 1 sentence explanation of why.
+Evidence: {evidence}
 """
-                response = client.models.generate_content(
-                    model='gemini-2.5-flash',
-                    contents=prompt,
-                    config=types.GenerateContentConfig(response_mime_type="application/json")
-                )
-                res = json.loads(response.text)
-                is_vuln = res.get("is_real_vulnerability", True)
-                if isinstance(is_vuln, str):
-                    is_vuln = is_vuln.lower() == 'true'
-                return {"is_false_positive": not bool(is_vuln), "reason": str(res.get("reason", ""))}
-            except Exception as e:
-                return {"is_false_positive": False, "reason": f"Gemini API failed: {str(e)}"}
 
-        if "cloud" in provider.lower() or "openai" in provider.lower() or "anthropic" in provider.lower():
-            if not api_key:
-                return {"is_false_positive": False, "reason": "Cloud API Key missing. Defaulting to true positive."}
-            return {"is_false_positive": False, "reason": "Cloud simulation assumes true positive."}
-
-        model_name = "mistral" if "mistral" in provider else "llama3"
-        available, _ = check_ollama_available(model_name)
-        if not available:
-             return {"is_false_positive": False, "reason": "AI offline. Defaulting to true positive."}
-
-        prompt = f"""You are GhostGraph AI's False Positive Reduction Engine.
-A static analysis scanner has flagged the following code snippet. 
-Your job is to determine if this is a FALSE POSITIVE (e.g., test code, a mock, unused code, or perfectly safe context) or a TRUE VULNERABILITY (dangerous code that could run in production).
-
-CRITICAL DIRECTIVE: You must default to treating this as a TRUE VULNERABILITY (is_real_vulnerability: true). 
-You may ONLY mark it as a False Positive (is_real_vulnerability: false) IF AND ONLY IF you see absolute proof in the snippet that it is safe, such as:
-1. The code explicitly hardcodes a safely sanitized, static string.
-2. The file path explicitly contains "test", "mock", or "spec".
-3. A secret key is literally "secret", "password", "test", or similar mock data.
-
-If a variable's origin is UNKNOWN or NOT VISIBLE in the snippet, you MUST ASSUME it is attacker-controlled and mark it as a TRUE VULNERABILITY. Do not guess that it is safe.
-
-Title: {title}
-Description: {description}
-Code Snippet:
-{evidence}
-
-Analyze the code. Does this look like a real, reachable vulnerability in production logic, or is it just test data, demo secrets, or unreachable noise?
-Provide your response strictly as JSON with two keys:
-- "is_real_vulnerability": A boolean (true if it is a real dangerous vulnerability, false if it is safe, test code, or unreachable noise).
-- "reason": A 1 sentence explanation of why.
-"""
         try:
-            response = ollama.chat(model=model_name, messages=[{"role": "user", "content": prompt}], format="json")
-            res = json.loads(response['message']['content'])
-            
-            is_vuln = res.get("is_real_vulnerability", True)
-            if isinstance(is_vuln, str):
-                is_vuln = is_vuln.lower() == 'true'
-            
-            is_fp = not bool(is_vuln)
-            reason = str(res.get("reason", ""))
-            return {"is_false_positive": is_fp, "reason": reason}
-        except Exception:
-            return {"is_false_positive": False, "reason": "AI parsing failed. Defaulting to true positive."}
+            if provider == GEMINI_PROVIDER:
+                from google.genai import types
 
-ai_analyst = AISecurityOrchestrator()
+                response = _gemini_client(api_key).models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=prompt,
+                    config=types.GenerateContentConfig(response_mime_type="application/json"),
+                )
+                result = json.loads(response.text)
+            else:
+                model = self._local_model(provider)
+                available, _ = check_ollama_available(model)
+                if not available:
+                    return {"is_false_positive": False, "reason": "AI provider unavailable; retained for human review."}
+                response = ollama.chat(model=model, messages=[{"role": "user", "content": prompt}], format="json")
+                result = json.loads(response["message"]["content"])
+
+            is_real = result.get("is_real_vulnerability", True)
+            if isinstance(is_real, str):
+                is_real = is_real.lower() == "true"
+            return {"is_false_positive": not bool(is_real), "reason": str(result.get("reason", ""))}
+        except Exception as error:
+            return {"is_false_positive": False, "reason": f"AI review unavailable; retained for human review. ({error})"}
+
+
+ai_analyst = AIAnalysisService()

@@ -1,18 +1,21 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import { HashRouter as Router, Routes, Route, Link, useParams, useNavigate } from 'react-router-dom';
 import { Sidebar } from './components/layout/Sidebar';
 import { TutorialOverlay } from './components/layout/TutorialOverlay';
 import { CreateEngagementForm } from './components/engagements/CreateEngagementForm';
-import { AnalyticsDashboard } from './components/analytics/AnalyticsDashboard';
-import { ThreatIntelView } from './components/intel/ThreatIntelView';
-import { SettingsPage } from './components/settings/SettingsPage';
 import { LiveTerminal } from './components/LiveTerminal';
 import { apiUrl } from './lib/api';
+import { errorMessage } from './lib/errors';
+import type { Engagement, EngagementDetails } from './types/api';
 import { Shield, FileText, Activity, Clock, Code } from 'lucide-react';
 import { Toaster, toast } from 'sonner';
 
+const AnalyticsDashboard = lazy(() => import('./components/analytics/AnalyticsDashboard').then((module) => ({ default: module.AnalyticsDashboard })));
+const ThreatIntelView = lazy(() => import('./components/intel/ThreatIntelView').then((module) => ({ default: module.ThreatIntelView })));
+const SettingsPage = lazy(() => import('./components/settings/SettingsPage').then((module) => ({ default: module.SettingsPage })));
+
 function DashboardLayout() {
-  const [engagements, setEngagements] = useState<any[]>([]);
+  const [engagements, setEngagements] = useState<Engagement[]>([]);
   const [showCreate, setShowCreate] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
 
@@ -23,8 +26,8 @@ function DashboardLayout() {
         const data = await res.json();
         setEngagements(data);
       }
-    } catch (e) {
-      console.error("Failed to fetch engagements");
+    } catch (error) {
+      console.error("Failed to fetch engagements", error);
     }
   };
 
@@ -67,13 +70,15 @@ function DashboardLayout() {
               }} />
             </div>
           ) : (
-            <Routes>
-              <Route path="/analytics" element={<AnalyticsDashboard />} />
-              <Route path="/threat-intel" element={<ThreatIntelView />} />
-              <Route path="/settings" element={<SettingsPage />} />
-              <Route path="/" element={<Overview engagements={engagements} />} />
-              <Route path="/engagement/:id" element={<EngagementDetail />} />
-            </Routes>
+            <Suspense fallback={<div className="p-6 text-gray-500">Loading view...</div>}>
+              <Routes>
+                <Route path="/analytics" element={<AnalyticsDashboard />} />
+                <Route path="/threat-intel" element={<ThreatIntelView />} />
+                <Route path="/settings" element={<SettingsPage />} />
+                <Route path="/" element={<Overview engagements={engagements} />} />
+                <Route path="/engagement/:id" element={<EngagementDetail />} />
+              </Routes>
+            </Suspense>
           )}
         </div>
         {showTutorial && <TutorialOverlay onClose={() => setShowTutorial(false)} />}
@@ -83,11 +88,11 @@ function DashboardLayout() {
   );
 }
 
-function Overview({ engagements }: { engagements: any[] }) {
+function Overview({ engagements }: { engagements: Engagement[] }) {
   const navigate = useNavigate();
   
   const totalFindings = engagements.reduce((sum, eng) => sum + (eng.total_findings || 0), 0);
-  const aiFiltered = engagements.reduce((sum, eng) => sum + (eng.filtered_findings || 0), 0);
+  const reviewedFindings = engagements.reduce((sum, eng) => sum + (eng.filtered_findings || 0), 0);
   
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -118,10 +123,10 @@ function Overview({ engagements }: { engagements: any[] }) {
         <div className="bg-white dark:bg-neutral-900 p-6 rounded-2xl border border-gray-200 dark:border-neutral-800 shadow-sm flex flex-col justify-between relative overflow-hidden">
           <div className="absolute inset-0 bg-gradient-to-br from-green-500/5 to-emerald-500/5" />
           <div className="relative flex items-center justify-between text-gray-500 mb-4">
-            <h3 className="font-medium text-sm">AI False Positives Filtered</h3>
+            <h3 className="font-medium text-sm">Findings Review Progress</h3>
             <Activity className="w-5 h-5 text-green-500" />
           </div>
-          <p className="relative text-4xl font-bold text-green-600 dark:text-green-400">{aiFiltered}</p>
+          <p className="relative text-4xl font-bold text-green-600 dark:text-green-400">{reviewedFindings}</p>
         </div>
       </div>
 
@@ -170,22 +175,22 @@ function Overview({ engagements }: { engagements: any[] }) {
 function EngagementDetail() {
   const { id } = useParams();
   const [activeTab, setActiveTab] = useState<'findings'|'audit'|'noise'>('findings');
-  const [data, setData] = useState<any>({ findings: [], audit_logs: [] });
+  const [data, setData] = useState<EngagementDetails>({ findings: [], audit_logs: [] });
   const [analyzingId, setAnalyzingId] = useState<number | null>(null);
 
   const [uploading, setUploading] = useState(false);
 
-  const fetchEngagementData = async () => {
+  const fetchEngagementData = useCallback(async () => {
     try {
         const res = await fetch(apiUrl(`/engagements/${id}/details`));
       if (res.ok) {
         const details = await res.json();
         setData(details);
       }
-    } catch (e) {
-      console.error("Failed to fetch details");
+    } catch (error) {
+      console.error("Failed to fetch details", error);
     }
-  };
+  }, [id]);
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
@@ -210,8 +215,8 @@ function EngagementDetail() {
       
       toast.success('Static analysis complete!', { id: toastId });
       fetchEngagementData();
-    } catch (err: any) {
-      toast.error(err.message || 'Scan failed.', { id: toastId });
+    } catch (error: unknown) {
+      toast.error(errorMessage(error, 'Scan failed.'), { id: toastId });
     } finally {
       setUploading(false);
       // Reset input
@@ -230,8 +235,8 @@ function EngagementDetail() {
       }
       toast.success('AI review complete!', { id: toastId });
       fetchEngagementData();
-    } catch (e: any) {
-      toast.error(e.message || 'AI analysis failed.', { id: toastId });
+    } catch (error: unknown) {
+      toast.error(errorMessage(error, 'AI analysis failed.'), { id: toastId });
     } finally {
       setAnalyzingId(null);
     }
@@ -244,7 +249,7 @@ function EngagementDetail() {
       fetchEngagementData();
     }, 3000);
     return () => clearInterval(interval);
-  }, [id]);
+  }, [fetchEngagementData]);
 
   return (
     <div className="flex flex-col h-full gap-6">
@@ -254,7 +259,7 @@ function EngagementDetail() {
             <Code className="text-indigo-500" />
             Static Analysis Dashboard
           </h2>
-          <p className="text-sm text-gray-500 mt-1">SAST Security Pair Programmer</p>
+          <p className="text-sm text-gray-500 mt-1">Rule-based findings with optional AI guidance</p>
         </div>
         <div className="flex gap-3">
           <button 
@@ -289,10 +294,10 @@ function EngagementDetail() {
         <div className="lg:col-span-2 flex flex-col bg-white dark:bg-neutral-900 border border-gray-200 dark:border-neutral-800 rounded-lg overflow-hidden">
           <div className="flex border-b border-gray-200 dark:border-neutral-800">
             <button onClick={() => setActiveTab('findings')} className={`px-4 py-3 text-sm font-medium flex items-center gap-2 border-b-2 ${activeTab === 'findings' ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400' : 'border-transparent text-gray-500'}`}>
-              <Shield size={16}/> Security Findings ({data.findings.filter((f: any) => !f.is_false_positive).length})
+              <Shield size={16}/> Security Findings ({data.findings.filter((finding) => !finding.is_false_positive).length})
             </button>
             <button onClick={() => setActiveTab('noise')} className={`px-4 py-3 text-sm font-medium flex items-center gap-2 border-b-2 ${activeTab === 'noise' ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400' : 'border-transparent text-gray-500'}`}>
-              <Activity size={16}/> Filtered Noise ({data.findings.filter((f: any) => f.is_false_positive).length})
+              <Activity size={16}/> Likely False Positives ({data.findings.filter((finding) => finding.is_false_positive).length})
             </button>
             <button onClick={() => setActiveTab('audit')} className={`px-4 py-3 text-sm font-medium flex items-center gap-2 border-b-2 ${activeTab === 'audit' ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400' : 'border-transparent text-gray-500'}`}>
               <Clock size={16}/> Scan History
@@ -303,7 +308,7 @@ function EngagementDetail() {
             <div className="bg-indigo-50 dark:bg-indigo-900/20 p-3 border-b border-indigo-100 dark:border-indigo-900/50">
               <div className="flex justify-between items-center mb-1.5">
                 <span className="text-xs font-semibold text-indigo-700 dark:text-indigo-400 flex items-center gap-2">
-                  <Activity size={12} className="animate-pulse" /> AI Pre-Filtering in Progress...
+                  <Activity size={12} className="animate-pulse" /> Optional AI Review in Progress...
                 </span>
                 <span className="text-xs font-medium text-indigo-700 dark:text-indigo-400">
                   {data.engagement.filtered_findings} / {data.engagement.total_findings} Findings Reviewed
@@ -321,13 +326,13 @@ function EngagementDetail() {
           <div className="p-4 overflow-y-auto flex-1 custom-scrollbar bg-gray-50/50 dark:bg-neutral-950/50">
             {activeTab === 'findings' && (
               <div className="grid gap-4">
-                {data.findings.filter((f: any) => !f.is_false_positive).length === 0 ? (
+                {data.findings.filter((finding) => !finding.is_false_positive).length === 0 ? (
                   <div className="p-12 border-2 border-dashed border-gray-200 dark:border-neutral-800 rounded-xl text-center">
                     <p className="text-gray-500 dark:text-gray-400">No active vulnerabilities found or scan is in progress.</p>
                   </div>
                 ) : (
-                  data.findings.filter((f: any) => !f.is_false_positive).map((f: any, idx: number) => (
-                    <div key={idx} className="p-4 bg-white dark:bg-neutral-900 border border-gray-200 dark:border-neutral-800 rounded-lg shadow-sm">
+                  data.findings.filter((finding) => !finding.is_false_positive).map((f) => (
+                    <div key={f.id} className="p-4 bg-white dark:bg-neutral-900 border border-gray-200 dark:border-neutral-800 rounded-lg shadow-sm">
                       <div className="flex justify-between items-start">
                         <div>
                           <div className="flex items-center gap-3 mb-2">
@@ -335,8 +340,10 @@ function EngagementDetail() {
                             <span className="text-sm font-medium text-gray-500">{f.file_path}:{f.line_number}</span>
                             {f.filtering_status === 'Pending' || f.filtering_status === 'In Progress' ? (
                               <span className="px-2 py-0.5 text-xs font-medium rounded-md bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 animate-pulse">AI Checking...</span>
+                            ) : f.filtering_status === 'Reviewed' ? (
+                              <span className="px-2 py-0.5 text-xs font-medium rounded-md bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">AI Reviewed</span>
                             ) : (
-                              <span className="px-2 py-0.5 text-xs font-medium rounded-md bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">AI Verified</span>
+                              <span className="px-2 py-0.5 text-xs font-medium rounded-md bg-gray-100 text-gray-600 dark:bg-neutral-800 dark:text-gray-400">Human Review Required</span>
                             )}
                           </div>
                           <h4 className="font-semibold">{f.title}</h4>
@@ -351,7 +358,7 @@ function EngagementDetail() {
                                 </svg>
                                 Reviewing Code...
                               </>
-                            ) : 'Ask Sentinel AI'}
+                            ) : 'Request AI Explanation'}
                           </button>
                         )}
                       </div>
@@ -394,25 +401,25 @@ function EngagementDetail() {
 
             {activeTab === 'noise' && (
               <div className="grid gap-4">
-                {data.findings.filter((f: any) => f.is_false_positive).length === 0 ? (
+                {data.findings.filter((finding) => finding.is_false_positive).length === 0 ? (
                   <div className="p-12 border-2 border-dashed border-gray-200 dark:border-neutral-800 rounded-xl text-center">
                     <p className="text-gray-500 dark:text-gray-400">No false positives detected yet.</p>
                   </div>
                 ) : (
-                  data.findings.filter((f: any) => f.is_false_positive).map((f: any, idx: number) => (
-                    <div key={idx} className="p-4 bg-gray-50 dark:bg-neutral-900/50 border border-gray-200 dark:border-neutral-800 rounded-lg shadow-sm opacity-75">
+                  data.findings.filter((finding) => finding.is_false_positive).map((f) => (
+                    <div key={f.id} className="p-4 bg-gray-50 dark:bg-neutral-900/50 border border-gray-200 dark:border-neutral-800 rounded-lg shadow-sm opacity-75">
                       <div className="flex justify-between items-start">
                         <div>
                           <div className="flex items-center gap-3 mb-2">
                             <span className="px-2 py-0.5 text-xs font-medium rounded-md bg-gray-200 text-gray-700 dark:bg-neutral-800 dark:text-gray-400">False Positive</span>
                             <span className="text-sm font-medium text-gray-500 line-through">{f.file_path}:{f.line_number}</span>
-                            <span className="px-2 py-0.5 text-xs font-medium rounded-md bg-green-100 text-green-700">AI Dismissed</span>
+                            <span className="px-2 py-0.5 text-xs font-medium rounded-md bg-green-100 text-green-700">AI Flagged</span>
                           </div>
                           <h4 className="font-semibold text-gray-600 dark:text-gray-400">{f.title}</h4>
                         </div>
                       </div>
                       <div className="mt-3">
-                         <p className="text-sm text-gray-500 italic mb-3">AI Reason: This code appears to be test data or not reachable in production.</p>
+                         <p className="text-sm text-gray-500 italic mb-3">Marked as a likely false positive by optional AI review. Human verification is still required.</p>
                          <div className="bg-[#1e1e1e] p-3 rounded-md overflow-x-auto border border-neutral-800 opacity-50">
                            <pre className="text-sm text-gray-300 font-mono">
                              <code>{f.code_snippet}</code>
@@ -427,8 +434,8 @@ function EngagementDetail() {
             
             {activeTab === 'audit' && (
               <div className="space-y-4">
-                {data.audit_logs && data.audit_logs.map((log: any, idx: number) => (
-                  <div key={idx} className="flex gap-4 p-4 bg-white dark:bg-neutral-900 border border-gray-200 dark:border-neutral-800 rounded-lg shadow-sm">
+                {data.audit_logs.map((log) => (
+                  <div key={log.id} className="flex gap-4 p-4 bg-white dark:bg-neutral-900 border border-gray-200 dark:border-neutral-800 rounded-lg shadow-sm">
                     <div className="mt-1">
                       <div className="w-8 h-8 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center text-blue-600 dark:text-blue-400">
                         <Clock size={16} />

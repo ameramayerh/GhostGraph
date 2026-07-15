@@ -6,7 +6,8 @@ import os
 import tempfile
 import zipfile
 import shutil
-import traceback
+import logging
+import re
 from pathlib import Path
 from datetime import datetime
 
@@ -14,12 +15,13 @@ from .models import Engagement, AuditLog, Finding, SystemSettings
 from .database import get_session
 from .services.sast_scanner import run_semgrep_scan, run_npm_audit
 from .services.ai_hunter import run_ai_hunter
-from .services.ai import ai_analyst
+from .services.ai import SUPPORTED_LLM_PROVIDERS, ai_analyst
 from .services.logger import ws_manager
 from .services.report_generator import generate_pdf_report
 from fastapi.responses import StreamingResponse
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 MAX_EXTRACTED_BYTES = 500 * 1024 * 1024
 
@@ -88,7 +90,7 @@ async def upload_and_scan(
     if not engagement:
         raise HTTPException(status_code=404, detail="Engagement not found")
 
-    if not file.filename.endswith('.zip'):
+    if not file.filename or not file.filename.lower().endswith('.zip'):
         raise HTTPException(status_code=400, detail="Only ZIP files are supported.")
 
     audit_log = AuditLog(
@@ -100,10 +102,10 @@ async def upload_and_scan(
     session.add(audit_log)
     session.commit()
     
-    await ws_manager.broadcast(f"Extracting source code from {file.filename}...", "info")
+    await ws_manager.broadcast("Preparing the uploaded project...", "info")
     
     # Extract to a temp directory
-    temp_dir = tempfile.mkdtemp(prefix="sentinel_")
+    temp_dir = tempfile.mkdtemp(prefix="ghostgraph_")
     zip_path = os.path.join(temp_dir, "upload.zip")
     
     try:
@@ -114,7 +116,7 @@ async def upload_and_scan(
         
         extract_zip_safely(zip_path, extract_dir)
             
-        await ws_manager.broadcast(f"Extraction complete. Starting SAST scan...", "info")
+        await ws_manager.broadcast("Project ready. Starting security checks...", "info")
         
         # Run SCA (npm audit)
         sca_findings = await run_npm_audit(engagement.id, extract_dir)
@@ -122,7 +124,7 @@ async def upload_and_scan(
         # Run SAST (Semgrep)
         sast_findings = await run_semgrep_scan(engagement.id, extract_dir)
         
-        # Run Agentic Threat Hunter (LLM)
+        # Run optional LLM-assisted review.
         ai_findings = await run_ai_hunter(engagement.id, extract_dir)
         
         findings = sca_findings + sast_findings + ai_findings
@@ -132,7 +134,7 @@ async def upload_and_scan(
         raise
     except Exception as e:
         error_msg = str(e) or repr(e)
-        print(traceback.format_exc())
+        logger.exception("Scan failed for engagement %s", engagement_id)
         raise HTTPException(status_code=500, detail=f"Scan failed: {error_msg}")
     finally:
         # Cleanup
@@ -142,7 +144,7 @@ async def upload_and_scan(
     session.exec(delete(Finding).where(Finding.engagement_id == engagement_id))
     session.commit()
     
-    # Smart De-Duplication
+    # Consolidate repeated findings reported within a small line range.
     deduped_findings = []
     
     # Sort by file path, then title, then line number
@@ -161,7 +163,7 @@ async def upload_and_scan(
                 # Merge them: keep the earlier line number, combine snippets if different
                 last.line_number = min(last.line_number, finding.line_number)
                 if finding.code_snippet and finding.code_snippet not in last.code_snippet:
-                    last.code_snippet += f"\\n...\\n{finding.code_snippet}"
+                    last.code_snippet += f"\n...\n{finding.code_snippet}"
                 continue
                 
         deduped_findings.append(finding)
@@ -174,17 +176,22 @@ async def upload_and_scan(
     engagement.filtered_findings = 0
     session.add(engagement)
     session.commit()
+
+    await ws_manager.broadcast(
+        f"Scan complete: {len(deduped_findings)} finding(s) ready for review.",
+        "success",
+    )
     
     audit_log_complete = AuditLog(
         engagement_id=engagement.id,
         action="SAST Scan Completed",
         user="GhostGraph Engine",
-        details=f"Identified {len(deduped_findings)} findings (de-duplicated from {len(findings)}). AI Pre-Filtering started."
+        details=f"Identified {len(deduped_findings)} findings (de-duplicated from {len(findings)}). Optional AI review started."
     )
     session.add(audit_log_complete)
     session.commit()
     
-    # Trigger background AI Noise Reduction
+    # Review findings in the background when an AI provider is available.
     background_tasks.add_task(background_noise_reduction, engagement.id)
     
     return {"status": "success", "findings_count": len(deduped_findings)}
@@ -193,7 +200,7 @@ async def background_noise_reduction(engagement_id: int):
     from sqlmodel import Session
     from .database import engine
     
-    await ws_manager.broadcast("AI Pre-Filtering Pipeline started in background...", "info")
+    await ws_manager.broadcast("Optional AI finding review started in the background...", "info")
     
     with Session(engine) as session:
         settings = session.exec(select(SystemSettings)).first()
@@ -201,6 +208,29 @@ async def background_noise_reduction(engagement_id: int):
         api_key = settings.api_key if settings else None
         
         findings = session.exec(select(Finding).where(Finding.engagement_id == engagement_id)).all()
+
+        available, availability_message = await asyncio.to_thread(
+            ai_analyst.provider_available, llm_provider, api_key
+        )
+        if not available:
+            for finding in findings:
+                finding.filtering_status = "Not Run"
+                session.add(finding)
+
+            engagement = session.get(Engagement, engagement_id)
+            if engagement:
+                engagement.filtered_findings = len(findings)
+                session.add(engagement)
+
+            session.add(AuditLog(
+                engagement_id=engagement_id,
+                action="AI Finding Review Skipped",
+                user="GhostGraph",
+                details=availability_message,
+            ))
+            session.commit()
+            await ws_manager.broadcast(f"AI finding review skipped: {availability_message}", "info")
+            return
         
         false_positives = 0
         for finding in findings:
@@ -209,7 +239,7 @@ async def background_noise_reduction(engagement_id: int):
             session.commit()
             
             try:
-                evidence = f"File: {finding.file_path}:{finding.line_number}\\n{finding.code_snippet}"
+                evidence = f"File: {finding.file_path}:{finding.line_number}\n{finding.code_snippet}"
                 result = await asyncio.to_thread(
                     ai_analyst.evaluate_false_positive, finding.title, finding.description, evidence, llm_provider, api_key
                 )
@@ -228,9 +258,10 @@ async def background_noise_reduction(engagement_id: int):
                     
                 session.commit()
                 
-                # Sleep briefly to avoid hammering the LLM locally
+                # Space local model requests to limit resource use.
                 await asyncio.sleep(0.5)
-            except Exception as e:
+            except Exception:
+                logger.exception("AI finding review failed for finding %s", finding.id)
                 finding.filtering_status = "Error"
                 session.add(finding)
                 
@@ -252,7 +283,7 @@ async def background_noise_reduction(engagement_id: int):
         session.add(audit)
         session.commit()
         
-        await ws_manager.broadcast(f"AI Pre-Filtering Complete. Removed {false_positives} false positives.", "success")
+        await ws_manager.broadcast(f"AI finding review complete. Marked {false_positives} false positives.", "success")
 
 @router.get("/engagements/{engagement_id}/findings", response_model=List[Finding])
 def read_engagement_findings(engagement_id: int, session: Session = Depends(get_session)):
@@ -347,9 +378,8 @@ def get_engagement_pdf_report(engagement_id: int, session: Session = Depends(get
     pdf_buffer = generate_pdf_report(engagement, findings, audit_logs)
     
     # Return as a downloadable file
-    headers = {
-        'Content-Disposition': f'attachment; filename="GhostGraph_AI_Report_{engagement.name.replace(" ", "_")}.pdf"'
-    }
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", engagement.name).strip("._") or "engagement"
+    headers = {'Content-Disposition': f'attachment; filename="GhostGraph_Report_{safe_name}.pdf"'}
     return StreamingResponse(pdf_buffer, media_type="application/pdf", headers=headers)
 
 @router.get("/analytics")
@@ -397,7 +427,7 @@ def get_threat_intel():
                 })
         return intel_data
     except Exception as e:
-        print(f"Error fetching threat intel: {e}")
+        logger.exception("Unable to read threat-intelligence records")
         return []
 
 @router.get("/settings")
@@ -405,6 +435,11 @@ def get_settings(session: Session = Depends(get_session)):
     settings = session.exec(select(SystemSettings)).first()
     if not settings:
         settings = SystemSettings()
+        session.add(settings)
+        session.commit()
+        session.refresh(settings)
+    elif settings.llm_provider not in SUPPORTED_LLM_PROVIDERS:
+        settings.llm_provider = "local-llama3"
         session.add(settings)
         session.commit()
         session.refresh(settings)
@@ -417,6 +452,8 @@ def get_settings(session: Session = Depends(get_session)):
 
 @router.post("/settings")
 def update_settings(new_settings: SystemSettings, session: Session = Depends(get_session)):
+    if new_settings.llm_provider not in SUPPORTED_LLM_PROVIDERS:
+        raise HTTPException(status_code=400, detail="Unsupported AI provider.")
     settings = session.exec(select(SystemSettings)).first()
     if not settings:
         settings = SystemSettings()

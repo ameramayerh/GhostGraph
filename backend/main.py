@@ -1,5 +1,6 @@
 import sys
 import asyncio
+from contextlib import asynccontextmanager
 
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
@@ -8,25 +9,28 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.database import create_db_and_tables
 from app.api import router as api_router
+from app.config import allowed_origins
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    create_db_and_tables()
+    yield
 
 app = FastAPI(
     title="GhostGraph API",
-    description="Educational Security Pair Programmer Backend",
-    version="1.0.0"
+    description="Local application-security scanning API",
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
-# Allow requests from the frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # Tighten this for production
+    allow_origins=allowed_origins(),
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-@app.on_event("startup")
-def on_startup():
-    create_db_and_tables()
 
 app.include_router(api_router, prefix="/api")
 

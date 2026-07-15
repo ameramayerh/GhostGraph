@@ -1,13 +1,16 @@
 import asyncio
 import json
+import logging
 import os
 import shutil
 from typing import List
 from ..models import Finding
 from .logger import ws_manager
 
-def extract_code_snippet(file_path: str, line_number: int, context_lines: int = 250) -> str:
-    """Reads the source file and extracts a large window of lines around the finding."""
+logger = logging.getLogger(__name__)
+
+def extract_code_snippet(file_path: str, line_number: int, context_lines: int = 4) -> str:
+    """Read a bounded source-code window around a finding."""
     if not os.path.exists(file_path) or line_number <= 0:
         return ""
     try:
@@ -40,7 +43,7 @@ async def run_npm_audit(engagement_id: int, target_dir: str) -> List[Finding]:
     if not os.path.exists(package_json_path):
         return findings
 
-    await ws_manager.broadcast("Running Software Composition Analysis (SCA) via npm audit...", "info")
+    await ws_manager.broadcast("Checking third-party packages for known vulnerabilities...", "info")
     
     try:
         # We use --audit-level=moderate to filter out low severity noise
@@ -56,7 +59,7 @@ async def run_npm_audit(engagement_id: int, target_dir: str) -> List[Finding]:
         except asyncio.TimeoutError:
             process.kill()
             await process.communicate()
-            await ws_manager.broadcast("npm audit timed out after 60 seconds; continuing with static analysis.", "error")
+            await ws_manager.broadcast("Dependency check timed out; continuing with source-code checks.", "warning")
             return findings
         
         # npm audit exits with non-zero code if vulnerabilities are found, so we don't check returncode
@@ -75,17 +78,17 @@ async def run_npm_audit(engagement_id: int, target_dir: str) -> List[Finding]:
                         
                     advisories = vuln_data.get("via", [])
                     cve = "Unknown CVE"
-                    desc = f"Vulnerable dependency detected: {pkg_name}\\n"
+                    desc = f"Vulnerable dependency detected: {pkg_name}\n"
                     
                     if advisories and isinstance(advisories[0], dict):
                         adv = advisories[0]
                         cve = adv.get("title", "Vulnerable Dependency")
-                        desc += f"\\nDetails: {adv.get('title', '')}"
-                        desc += f"\\nUrl: {adv.get('url', '')}"
-                    elif isinstance(advisories[0], str):
+                        desc += f"\nDetails: {adv.get('title', '')}"
+                        desc += f"\nURL: {adv.get('url', '')}"
+                    elif advisories and isinstance(advisories[0], str):
                         cve = f"Vulnerable module: {advisories[0]}"
                         
-                    desc += f"\\nFix Available: {vuln_data.get('fixAvailable', False)}"
+                    desc += f"\nFix available: {vuln_data.get('fixAvailable', False)}"
                     
                     finding = Finding(
                         engagement_id=engagement_id,
@@ -100,12 +103,13 @@ async def run_npm_audit(engagement_id: int, target_dir: str) -> List[Finding]:
                     )
                     findings.append(finding)
                     
-                await ws_manager.broadcast(f"SCA completed. Found {len(findings)} vulnerable dependencies.", "success")
+                await ws_manager.broadcast(f"Dependency check complete: {len(findings)} issue(s) found.", "success")
             except json.JSONDecodeError as e:
-                await ws_manager.broadcast(f"Failed to parse npm audit output: {e}", "error")
+                await ws_manager.broadcast("Dependency check returned unreadable results.", "error")
+                logger.warning("Failed to parse npm audit output: %s", e)
     except Exception as e:
-        await ws_manager.broadcast(f"npm audit encountered an exception: {str(e)}", "error")
-        print(f"npm audit exception: {e}")
+        await ws_manager.broadcast("Dependency check could not complete.", "error")
+        logger.exception("npm audit failed")
         
     return findings
 
@@ -113,7 +117,7 @@ async def run_semgrep_scan(engagement_id: int, target_dir: str) -> List[Finding]
     """Runs Semgrep against the extracted source code directory."""
     findings = []
     
-    await ws_manager.broadcast(f"Launching Semgrep SAST scan on {target_dir}...", "info")
+    await ws_manager.broadcast("Checking source code for unsafe patterns...", "info")
 
     import sys
     # Try to find semgrep in the current virtualenv Scripts directory first (for Windows)
@@ -152,7 +156,7 @@ async def run_semgrep_scan(engagement_id: int, target_dir: str) -> List[Finding]
         except asyncio.TimeoutError:
             process.kill()
             await process.communicate()
-            await ws_manager.broadcast("Semgrep timed out after 120 seconds; continuing without SAST results.", "error")
+            await ws_manager.broadcast("Source-code check timed out; continuing with available results.", "warning")
             return findings
         
         if stdout:
@@ -194,15 +198,17 @@ async def run_semgrep_scan(engagement_id: int, target_dir: str) -> List[Finding]
                     )
                     findings.append(finding)
                 
-                await ws_manager.broadcast(f"Semgrep scan completed. Found {len(findings)} issues.", "success")
+                await ws_manager.broadcast(f"Source-code check complete: {len(findings)} issue(s) found.", "success")
             except json.JSONDecodeError as e:
-                await ws_manager.broadcast(f"Failed to parse Semgrep output: {e}", "error")
+                await ws_manager.broadcast("Source-code check returned unreadable results.", "error")
+                logger.warning("Failed to parse Semgrep output: %s", e)
         else:
              if stderr:
-                 await ws_manager.broadcast(f"Semgrep error: {stderr.decode()}", "error")
+                 await ws_manager.broadcast("Source-code check could not complete.", "error")
+                 logger.error("Semgrep error: %s", stderr.decode(errors="replace"))
 
     except Exception as e:
-        await ws_manager.broadcast(f"Semgrep scan encountered an exception: {str(e)}", "error")
-        print(f"Semgrep exception: {e}")
+        await ws_manager.broadcast("Source-code check could not complete.", "error")
+        logger.exception("Semgrep scan failed")
         
     return findings

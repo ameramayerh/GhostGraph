@@ -1,5 +1,3 @@
-import logging
-import asyncio
 from typing import List
 from fastapi import WebSocket
 
@@ -21,44 +19,9 @@ class ConnectionManager:
             try:
                 await connection.send_json(payload)
             except Exception:
-                pass
+                self.disconnect(connection)
 
-# Global instance
+# Only deliberate scan events are sent to the desktop activity panel. Application,
+# database, and HTTP diagnostics remain in the backend console where developers can
+# inspect them without overwhelming users or exposing query details in the UI.
 ws_manager = ConnectionManager()
-
-class WebsocketLogHandler(logging.Handler):
-    def emit(self, record):
-        try:
-            log_entry = self.format(record)
-            level = "info"
-            if record.levelno >= logging.ERROR:
-                level = "error"
-            elif record.levelno >= logging.WARNING:
-                level = "warning"
-            
-            # Fire and forget the broadcast in the current asyncio event loop
-            loop = asyncio.get_running_loop()
-            loop.create_task(ws_manager.broadcast(log_entry, level))
-        except RuntimeError:
-            # If no event loop is running (e.g. during startup), skip
-            pass
-        except Exception:
-            pass
-
-# Attach to standard loggers so the frontend terminal sees REAL traffic
-ws_handler = WebsocketLogHandler()
-ws_handler.setFormatter(logging.Formatter('%(name)s: %(message)s'))
-
-# Set up root logger to capture our app logs
-root_logger = logging.getLogger()
-root_logger.setLevel(logging.INFO)
-root_logger.addHandler(ws_handler)
-
-# Capture SQLAlchemy (Database queries) for that authentic hacker feel
-sqlalchemy_logger = logging.getLogger("sqlalchemy.engine.Engine")
-sqlalchemy_logger.setLevel(logging.INFO)
-sqlalchemy_logger.addHandler(ws_handler)
-
-# Capture FastAPI/Uvicorn requests
-uvicorn_logger = logging.getLogger("uvicorn.access")
-uvicorn_logger.addHandler(ws_handler)

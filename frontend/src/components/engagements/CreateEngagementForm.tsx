@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { ShieldAlert, CheckCircle2 } from 'lucide-react';
 import { apiUrl } from '../../lib/api';
+import { errorMessage } from '../../lib/errors';
 
 interface Engagement {
   name: string;
@@ -31,8 +32,8 @@ export function CreateEngagementForm({ onSuccess }: { onSuccess: () => void }) {
       }
 
       onSuccess();
-    } catch (err: any) {
-      setError(err.message);
+    } catch (error: unknown) {
+      setError(errorMessage(error, 'Failed to create engagement'));
     } finally {
       setLoading(false);
     }

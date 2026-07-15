@@ -54,7 +54,7 @@ class Finding(SQLModel, table=True):
     
     # AI Filtering Fields
     is_false_positive: bool = Field(default=False)
-    filtering_status: str = Field(default="Pending") # Pending, Reviewed, Error
+    filtering_status: str = Field(default="Pending")  # Pending, In Progress, Reviewed, Not Run, Error
     
     engagement: Optional[Engagement] = Relationship(back_populates="findings")
 
@@ -63,4 +63,3 @@ class SystemSettings(SQLModel, table=True):
     llm_provider: str = "local-llama3"
     api_key: Optional[str] = None
     updated_at: datetime = Field(default_factory=datetime.utcnow)
-

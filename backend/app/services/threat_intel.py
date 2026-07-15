@@ -1,8 +1,11 @@
 import chromadb
 import hashlib
+import logging
 import os
 import re
 from typing import List
+
+logger = logging.getLogger(__name__)
 
 class ThreatIntelService:
     def __init__(self):
@@ -14,24 +17,21 @@ class ThreatIntelService:
         
         self.client = chromadb.PersistentClient(path=db_path)
         
-        # Create or get the collection for Threat Intelligence
-        # Embeddings are supplied by GhostGraph itself. This avoids Chroma downloading a
-        # sentence-transformer model the first time the app starts.
+        # GhostGraph supplies deterministic local vectors to avoid a model download.
         self.collection = self.client.get_or_create_collection(
             name="threat_intelligence", embedding_function=None
         )
         
-        # Mock ingestion of NVD / MITRE STIX JSON feeds if empty
         if self.collection.count() == 0:
             self._ingest_initial_feeds()
 
     def _ingest_initial_feeds(self):
         """Optionally fetches CISA KEV, otherwise seeds a useful offline catalog."""
         if os.getenv("GHOSTGRAPH_FETCH_THREAT_INTEL", "false").lower() not in {"1", "true", "yes"}:
-            self._ingest_mock_data()
+            self._ingest_builtin_data()
             return
 
-        print("Ingesting CISA Known Exploited Vulnerabilities into ChromaDB...")
+        logger.info("Loading the CISA Known Exploited Vulnerabilities catalog")
         try:
             import requests
             response = requests.get("https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json", timeout=15)
@@ -65,21 +65,20 @@ class ThreatIntelService:
                         metadatas=metadatas[i:i+batch_size],
                         embeddings=[self._embed(document) for document in documents[i:i+batch_size]],
                     )
-                print(f"Ingested {len(documents)} live threat intel records from CISA.")
+                logger.info("Loaded %s CISA KEV records", len(documents))
         except Exception as e:
-            print(f"Failed to ingest CISA KEV: {e}")
-            self._ingest_mock_data()
+            logger.warning("CISA KEV download failed; using built-in guidance: %s", e)
+            self._ingest_builtin_data()
 
-    def _ingest_mock_data(self):
-        """Simulates downloading and ingesting massive JSON feeds into the Vector DB."""
-        print("Ingesting initial threat intelligence feeds into ChromaDB...")
+    def _ingest_builtin_data(self):
+        """Seed a small offline collection of defensive security guidance."""
         documents = [
-            "CISA KEV notes that lack of Strict-Transport-Security (HSTS) allows SSL stripping attacks which are actively used to capture credentials on insecure network boundaries.",
-            "CISA Alert: Session hijacking via insecure cookies is a common initial access vector for ransomware operators. Always set Secure and HttpOnly flags.",
-            "GitHub Advisory: Hardcoded secrets in client-side code are the #1 cause of major data breaches. Rotate exposed AWS/GCP keys immediately.",
-            "OWASP Top 10: UI Redressing (Clickjacking) via missing X-Frame-Options is frequently chained with CSRF to force state-changing actions.",
-            "MITRE ATT&CK T1552: Attackers search local file systems and JS bundles for unsecured credentials and API keys.",
-            "NVD CVE-2023-XXXX: Missing authentication on GraphQL endpoints allows unauthorized data exfiltration.",
+            "Use HTTP Strict Transport Security after validating HTTPS deployment to reduce protocol downgrade risk.",
+            "Set Secure, HttpOnly, and an appropriate SameSite policy on session cookies.",
+            "Do not store credentials in source code. Use protected configuration and rotate exposed secrets.",
+            "Use Content-Security-Policy frame-ancestors or X-Frame-Options to reduce clickjacking risk.",
+            "MITRE ATT&CK T1552 describes adversary attempts to locate unsecured credentials in files and other storage locations.",
+            "Apply authentication and object-level authorization consistently to API and GraphQL operations.",
         ]
         
         ids = [f"intel_{i}" for i in range(len(documents))]
@@ -89,11 +88,11 @@ class ThreatIntelService:
             metadatas=[{"source": "Built-in GhostGraph guidance", "type": "Security Guidance"} for _ in documents],
             embeddings=[self._embed(document) for document in documents],
         )
-        print(f"Ingested {len(documents)} threat intel records.")
+        logger.info("Loaded %s built-in security guidance records", len(documents))
 
     @staticmethod
     def _embed(text: str, dimensions: int = 64) -> List[float]:
-        """Create a small deterministic local vector; it needs no model download."""
+        """Create a deterministic token-hashing vector without a model download."""
         vector = [0.0] * dimensions
         for token in re.findall(r"[a-z0-9_]+", text.lower()):
             index = int.from_bytes(hashlib.sha256(token.encode("utf-8")).digest()[:4], "big") % dimensions
@@ -103,7 +102,7 @@ class ThreatIntelService:
 
     def retrieve_context(self, finding_title: str, description: str = "") -> str:
         """
-        Queries the ChromaDB vector store for semantically similar threat intelligence.
+        Query the local ChromaDB collection for related defensive guidance.
         """
         query_text = f"{finding_title} {description}"
         try:
@@ -115,7 +114,7 @@ class ThreatIntelService:
                 context = " | ".join(results['documents'][0])
                 return context
         except Exception as e:
-            print(f"Vector DB query failed: {e}")
+            logger.warning("Threat-intelligence query failed: %s", e)
             
         return "No specific threat intel context retrieved."
 

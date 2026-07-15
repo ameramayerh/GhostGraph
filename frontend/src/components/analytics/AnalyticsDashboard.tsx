@@ -3,9 +3,10 @@ import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Toolti
 import { Activity, ShieldAlert, Target } from 'lucide-react';
 import { toast } from 'sonner';
 import { apiUrl } from '../../lib/api';
+import type { AnalyticsData } from '../../types/api';
 
 export function AnalyticsDashboard() {
-  const [data, setData] = useState({
+  const [data, setData] = useState<AnalyticsData>({
     totalAssets: 0,
     activeEngagements: 0,
     criticalRisks: 0,
@@ -30,12 +31,12 @@ export function AnalyticsDashboard() {
       });
   }, []);
 
-  if (loading) return <div className="p-6 text-gray-500">Loading Enterprise Analytics Engine...</div>;
+  if (loading) return <div className="p-6 text-gray-500">Loading analytics...</div>;
   return (
     <div className="flex flex-col h-full overflow-y-auto space-y-6">
       <div>
         <h2 className="text-2xl font-bold tracking-tight">Analytics Dashboard</h2>
-        <p className="text-sm text-gray-500 mt-1">Enterprise-wide vulnerability metrics and risk distribution.</p>
+        <p className="text-sm text-gray-500 mt-1">Finding counts and severity distribution across local engagements.</p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -89,7 +90,7 @@ export function AnalyticsDashboard() {
                   paddingAngle={5}
                   dataKey="value"
                 >
-                  {data.severityData.map((entry: any, index: number) => (
+                  {data.severityData.map((entry, index) => (
                     <Cell key={`cell-${index}`} fill={entry.color} />
                   ))}
                 </Pie>
